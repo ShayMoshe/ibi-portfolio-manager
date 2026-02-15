@@ -1,6 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import SortableTable, { Column as TableColumn } from "./SortableTable";
+import { fetchMultipleStockPrices, StockPrice } from "./stockPriceService";
+import StockDetail from "./StockDetail";
 
 const columns = [
   "תאריך",
@@ -182,6 +184,8 @@ const App = () => {
   const [validationError, setValidationError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<"summary" | "table">("summary");
+  const [showOnlyActive, setShowOnlyActive] = useState(false);
+  const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
 
   const rowCount = useMemo(() => rows.length, [rows]);
   const uniqueSymbols = useMemo(() => {
@@ -195,18 +199,73 @@ const App = () => {
     return Array.from(symbols).sort((a, b) => a.localeCompare(b));
   }, [rows]);
 
-  const stocksTableData = useMemo(
-    () => uniqueSymbols.map((symbol) => ({ TICKER: symbol })),
-    [uniqueSymbols]
-  );
+  const stocksTableData = useMemo(() => {
+    const allStocks = uniqueSymbols.map((symbol) => {
+      let quantity = 0;
+      let totalFees = 0;
+      
+      rows.forEach((row) => {
+        const ticker = row["מס' נייר / סימבול"].trim();
+        if (ticker !== symbol) return;
+        
+        const actionType = row["סוג פעולה"].trim();
+        const amountStr = row["כמות"].trim();
+        const amount = parseFloat(amountStr) || 0;
+        
+        // Calculate quantity
+        if (actionType === "קניה חול מטח" || actionType === "הטבה") {
+          quantity += amount;
+        } else if (actionType === "מכירה חול מטח") {
+          quantity -= amount;
+        }
+        
+        // Sum transaction fees
+        const feeStr = row["עמלת פעולה"].trim();
+        const fee = parseFloat(feeStr) || 0;
+        totalFees += Math.abs(fee); // Use absolute value in case fees are negative
+      });
+      
+      return { 
+        TICKER: symbol,
+        "כמות במניה": quantity.toFixed(2),
+        "עמלת פעולה": totalFees.toFixed(2),
+      };
+    });
+    
+    if (showOnlyActive) {
+      return allStocks.filter((stock) => parseFloat(stock["כמות במניה"]) !== 0);
+    }
+    
+    return allStocks;
+  }, [uniqueSymbols, rows, showOnlyActive]);
 
-  const stocksTableColumns = useMemo<TableColumn<{ TICKER: string }>[]>(
+  const stocksTableColumns = useMemo<TableColumn<{ TICKER: string; "כמות במניה": string; "עמלת פעולה": string }>[]>(
     () => [
       {
         key: "TICKER",
         label: "TICKER",
         sortable: true,
         filterable: true,
+        render: (value) => (
+          <button
+            className="ticker-link"
+            onClick={() => setSelectedTicker(String(value))}
+          >
+            {String(value)}
+          </button>
+        ),
+      },
+      {
+        key: "כמות במניה",
+        label: "כמות במניה",
+        sortable: true,
+        filterable: false,
+      },
+      {
+        key: "עמלת פעולה",
+        label: "עמלת פעולה",
+        sortable: true,
+        filterable: false,
       },
     ],
     []
@@ -269,8 +328,72 @@ const App = () => {
     setStatus("Upload XLSX files to begin.");
   };
 
+  // Auto-load dev files in development mode
+  useEffect(() => {
+    const loadDevFiles = async () => {
+      // Only run in development mode
+      if (!import.meta.env.DEV) return;
+
+      try {
+        // Use Vite's import.meta.glob to find all .xlsx files in dev-data folder
+        const devFiles = import.meta.glob('../dev-data/*.xlsx', { 
+          query: '?url',
+          import: 'default' 
+        });
+
+        const fileKeys = Object.keys(devFiles);
+        
+        if (fileKeys.length === 0) {
+          console.log('No dev files found in dev-data folder');
+          return;
+        }
+
+        console.log(`Found ${fileKeys.length} dev file(s), auto-loading...`);
+        setIsLoading(true);
+        setStatus("Loading dev files...");
+
+        const allRows: Row[] = [];
+
+        for (const filePath of fileKeys) {
+          const urlModule = await devFiles[filePath]();
+          const url = urlModule as string;
+          const response = await fetch(url);
+          const buffer = await response.arrayBuffer();
+          const workbook = XLSX.read(buffer, { type: "array" });
+          allRows.push(...parseWorkbook(workbook));
+        }
+
+        setRows(allRows);
+        if (allRows.length === 0) {
+          setValidationError(null);
+          setStatus("No rows found in dev files.");
+        } else {
+          const validation = validateYears(allRows);
+          if (!validation.ok) {
+            setValidationError(validation.message);
+            setStatus(`שגיאת אימות: ${validation.message}`);
+          } else {
+            setValidationError(null);
+            setStatus(`✓ Auto-loaded ${allRows.length} rows from ${fileKeys.length} dev file(s).`);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to auto-load dev files:', error);
+        // Don't show error to user, just silently fail and let them upload manually
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadDevFiles();
+  }, []); // Run once on mount
+
   return (
     <div className="page">
+      {selectedTicker ? (
+        <StockDetail ticker={selectedTicker} onBack={() => setSelectedTicker(null)} />
+      ) : (
+        <>
       <header className="hero">
         <div>
           <p className="eyebrow">IBI Portfolio Manager</p>
@@ -335,7 +458,17 @@ const App = () => {
         ) : null}
         {activeTab === "summary" ? (
           <div className="summary-panel">
-            <h3>רשימת מניות</h3>
+            <div className="summary-header">
+              <h3>רשימת מניות</h3>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={showOnlyActive}
+                  onChange={(e) => setShowOnlyActive(e.target.checked)}
+                />
+                הראה רק מניות פעילות
+              </label>
+            </div>
             {rows.length === 0 || validationError ? (
               <p className="empty">
                 {validationError
@@ -378,6 +511,8 @@ const App = () => {
           </>
         )}
       </section>
+        </>
+      )}
     </div>
   );
 };
