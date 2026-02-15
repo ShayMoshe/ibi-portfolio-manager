@@ -15,6 +15,19 @@ npm run dev
 npm run build
 ```
 
-## GitHub Pages note
+## GitHub Pages Deployment
 
-The app is configured with `base: "./"` in `vite.config.ts` so it can be hosted under GitHub Pages without absolute paths. If you later host the site under a repository subpath and want explicit routing, set `base` to `"/YOUR_REPO_NAME/"`.
+The app is automatically deployed to GitHub Pages on every push to the `main` branch.
+
+**Live site:** https://shaymoshe.github.io/ibi-portfolio-manager/
+
+### Setup (one-time)
+
+To enable GitHub Pages deployment:
+
+1. Go to your repository settings on GitHub
+2. Navigate to **Settings > Pages**
+3. Under **Build and deployment**, set:
+   - **Source**: GitHub Actions
+
+The workflow will automatically build and deploy the site on every push to main.
