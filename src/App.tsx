@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
+import {
+  Bar,
+  BarChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import SortableTable, { Column as TableColumn } from "./SortableTable";
 import { fetchMultipleStockPrices, StockPrice } from "./stockPriceService";
 import StockDetail from "./StockDetail";
@@ -58,6 +66,80 @@ const parseDateYear = (value: string) => {
   }
 
   return null;
+};
+
+// Parse date to timestamp for sorting
+const parseDateToTimestamp = (value: string): number => {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return 0;
+  }
+
+  // Try Excel date number
+  if (/^\d+(\.\d+)?$/.test(trimmed)) {
+    const numeric = Number(trimmed);
+    if (Number.isFinite(numeric)) {
+      const parsed = XLSX.SSF.parse_date_code(numeric);
+      if (parsed && parsed.y) {
+        return new Date(parsed.y, parsed.m - 1, parsed.d).getTime();
+      }
+    }
+  }
+
+  // Try DD/MM/YYYY format
+  const dmyMatch = trimmed.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})$/);
+  if (dmyMatch) {
+    const day = parseInt(dmyMatch[1], 10);
+    const month = parseInt(dmyMatch[2], 10) - 1; // month is 0-indexed
+    const year = parseInt(dmyMatch[3], 10);
+    return new Date(year, month, day).getTime();
+  }
+
+  // Try YYYY-MM-DD format
+  const ymdMatch = trimmed.match(/^(\d{4})[\/.\-](\d{1,2})[\/.\-](\d{1,2})$/);
+  if (ymdMatch) {
+    const year = parseInt(ymdMatch[1], 10);
+    const month = parseInt(ymdMatch[2], 10) - 1;
+    const day = parseInt(ymdMatch[3], 10);
+    return new Date(year, month, day).getTime();
+  }
+
+  return 0;
+};
+
+const formatDateLabel = (value: string): string => {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  if (/^\d+(\.\d+)?$/.test(trimmed)) {
+    const numeric = Number(trimmed);
+    if (Number.isFinite(numeric)) {
+      const parsed = XLSX.SSF.parse_date_code(numeric);
+      if (parsed && parsed.y) {
+        const day = String(parsed.d).padStart(2, "0");
+        const month = String(parsed.m).padStart(2, "0");
+        return `${day}/${month}/${parsed.y}`;
+      }
+    }
+  }
+
+  const dmyMatch = trimmed.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})$/);
+  if (dmyMatch) {
+    const day = dmyMatch[1].padStart(2, "0");
+    const month = dmyMatch[2].padStart(2, "0");
+    return `${day}/${month}/${dmyMatch[3]}`;
+  }
+
+  const ymdMatch = trimmed.match(/^(\d{4})[\/.\-](\d{1,2})[\/.\-](\d{1,2})$/);
+  if (ymdMatch) {
+    const day = ymdMatch[3].padStart(2, "0");
+    const month = ymdMatch[2].padStart(2, "0");
+    return `${day}/${month}/${ymdMatch[1]}`;
+  }
+
+  return trimmed;
 };
 
 const validateYears = (rows: Row[]) => {
@@ -341,6 +423,78 @@ const App = () => {
     };
   }, [uniqueSymbols, rows]);
 
+  const depositsByMonth = useMemo(() => {
+    type MonthEntry = {
+      monthKey: string;
+      monthLabel: string;
+      timestamp: number;
+      amount: number;
+      details: { dateLabel: string; amount: number }[];
+    };
+
+    const deposits: { dateLabel: string; timestamp: number; amount: number }[] = [];
+
+    rows.forEach((row) => {
+      const ticker = row["מס' נייר / סימבול"].trim();
+      if (ticker !== "900") {
+        return;
+      }
+
+      const dateValue = row["תאריך"].trim();
+      const dateLabel = formatDateLabel(dateValue);
+      const timestamp = parseDateToTimestamp(dateValue);
+      const amountStr = row["תמורה בשקלים"].trim();
+      const amount = Math.abs(parseFloat(amountStr) || 0);
+
+      if (!dateLabel || !timestamp || amount === 0) {
+        return;
+      }
+
+      deposits.push({ dateLabel, timestamp, amount });
+    });
+
+    if (deposits.length === 0) {
+      return [] as MonthEntry[];
+    }
+
+    deposits.sort((a, b) => a.timestamp - b.timestamp);
+
+    const monthMap = new Map<string, MonthEntry>();
+    const first = new Date(deposits[0].timestamp);
+    const last = new Date(deposits[deposits.length - 1].timestamp);
+    const start = new Date(first.getFullYear(), first.getMonth(), 1);
+    const end = new Date(last.getFullYear(), last.getMonth(), 1);
+
+    for (let cursor = new Date(start); cursor <= end; cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1)) {
+      const year = cursor.getFullYear();
+      const month = cursor.getMonth() + 1;
+      const monthKey = `${year}-${String(month).padStart(2, "0")}`;
+      const monthLabel = `${String(month).padStart(2, "0")}/${year}`;
+      monthMap.set(monthKey, {
+        monthKey,
+        monthLabel,
+        timestamp: cursor.getTime(),
+        amount: 0,
+        details: [],
+      });
+    }
+
+    deposits.forEach((entry) => {
+      const date = new Date(entry.timestamp);
+      const year = date.getFullYear();
+      const month = date.getMonth() + 1;
+      const monthKey = `${year}-${String(month).padStart(2, "0")}`;
+      const monthEntry = monthMap.get(monthKey);
+      if (!monthEntry) {
+        return;
+      }
+      monthEntry.amount += entry.amount;
+      monthEntry.details.push({ dateLabel: entry.dateLabel, amount: entry.amount });
+    });
+
+    return Array.from(monthMap.values()).sort((a, b) => a.timestamp - b.timestamp);
+  }, [rows]);
+
   const stocksTableColumns = useMemo<TableColumn<{ TICKER: string; "כמות במניה": string; 'סה"כ עמלות': string; 'סה"כ דיבידנד': string; 'סה"כ מס': string }>[]>(
     () => [
       {
@@ -401,12 +555,28 @@ const App = () => {
 
   const transactionsTableColumns = useMemo<TableColumn<Row>[]>(
     () =>
-      columns.map((col) => ({
-        key: col,
-        label: col,
-        sortable: true,
-        filterable: true,
-      })),
+      columns.map((col) => {
+        if (col === "תאריך") {
+          return {
+            key: col,
+            label: col,
+            sortable: true,
+            filterable: true,
+            filterType: 'date' as const,
+            sortComparator: (a: unknown, b: unknown) => {
+              const aTimestamp = parseDateToTimestamp(String(a ?? ""));
+              const bTimestamp = parseDateToTimestamp(String(b ?? ""));
+              return aTimestamp - bTimestamp;
+            },
+          };
+        }
+        return {
+          key: col,
+          label: col,
+          sortable: true,
+          filterable: true,
+        };
+      }),
     []
   );
 
@@ -529,7 +699,11 @@ const App = () => {
   return (
     <div className="page">
       {selectedTicker ? (
-        <StockDetail ticker={selectedTicker} onBack={() => setSelectedTicker(null)} />
+        <StockDetail
+          ticker={selectedTicker}
+          rows={rows}
+          onBack={() => setSelectedTicker(null)}
+        />
       ) : (
         <>
       <header className="hero">
@@ -641,37 +815,88 @@ const App = () => {
                   : "עדיין אין נתונים להצגה."}
               </p>
             ) : (
-              <div className="account-summary-grid">
-                <div className="account-card">
-                  <div className="account-card-label">סה"כ הפקדות</div>
-                  <div className="account-card-value highlight-positive">{formatNumber(stocksSummary.totalCashTransfers)}₪</div>
-                  {stocksSummary.totalBenefitsAndOther > 0 && (
-                    <div className="account-card-subtext">+{formatNumber(stocksSummary.totalBenefitsAndOther)}₪ הטבות/שונות</div>
+              <>
+                <div className="account-summary-grid">
+                  <div className="account-card">
+                    <div className="account-card-label">סה"כ הפקדות</div>
+                    <div className="account-card-value highlight-positive">{formatNumber(stocksSummary.totalCashTransfers)}₪</div>
+                    {stocksSummary.totalBenefitsAndOther > 0 && (
+                      <div className="account-card-subtext">+{formatNumber(stocksSummary.totalBenefitsAndOther)}₪ הטבות/שונות</div>
+                    )}
+                  </div>
+                  <div className="account-card">
+                    <div className="account-card-label">סה"כ עמלות</div>
+                    <div className="account-card-value highlight-negative">{formatNumber(stocksSummary.totalFees)}$</div>
+                  </div>
+                  <div className="account-card">
+                    <div className="account-card-label">סה"כ דיבידנד</div>
+                    <div className="account-card-value highlight-positive">
+                      {stocksSummary.totalDividends > 0 ? `${formatNumber(stocksSummary.totalDividends)}$` : '0$'}
+                    </div>
+                  </div>
+                  <div className="account-card">
+                    <div className="account-card-label">מס סה"כ דיבידנד</div>
+                    <div className="account-card-value highlight-negative">
+                      {stocksSummary.totalTaxes > 0 ? `${formatNumber(stocksSummary.totalTaxes)}$` : '0$'}
+                    </div>
+                  </div>
+                  <div className="account-card">
+                    <div className="account-card-label">סה"כ מס רווחי הון</div>
+                    <div className="account-card-value highlight-negative">
+                      {stocksSummary.totalCapitalGainsTax > 0 ? `${formatNumber(stocksSummary.totalCapitalGainsTax)}₪` : '0₪'}
+                    </div>
+                  </div>
+                </div>
+                <div className="account-chart-card">
+                  <div className="account-chart-header">הפקדות לפי חודש</div>
+                  {depositsByMonth.length === 0 ? (
+                    <div className="account-chart-empty">אין הפקדות להצגה.</div>
+                  ) : (
+                    <div className="account-chart">
+                      <ResponsiveContainer width="100%" height={280}>
+                        <BarChart data={depositsByMonth} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                          <XAxis dataKey="monthLabel" tick={{ fontSize: 12 }} />
+                          <YAxis tick={{ fontSize: 12 }} />
+                          <Tooltip
+                            content={({ active, payload }) => {
+                              if (!active || !payload || payload.length === 0) {
+                                return null;
+                              }
+                              const data = payload[0].payload as {
+                                monthLabel: string;
+                                amount: number;
+                                details: { dateLabel: string; amount: number }[];
+                              };
+
+                              return (
+                                <div className="account-chart-tooltip">
+                                  <div className="account-chart-tooltip-title">חודש: {data.monthLabel}</div>
+                                  <div className="account-chart-tooltip-total">
+                                    סה"כ: {formatNumber(data.amount)}₪
+                                  </div>
+                                  {data.details.length === 0 ? (
+                                    <div className="account-chart-tooltip-empty">אין הפקדות בחודש זה.</div>
+                                  ) : (
+                                    <div className="account-chart-tooltip-list">
+                                      {data.details.map((item, index) => (
+                                        <div key={`${item.dateLabel}-${index}`} className="account-chart-tooltip-row">
+                                          <span>{item.dateLabel}</span>
+                                          <span>{formatNumber(item.amount)}₪</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            }}
+                          />
+                          <Bar dataKey="amount" fill="#0f172a" radius={[6, 6, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
                   )}
                 </div>
-                <div className="account-card">
-                  <div className="account-card-label">סה"כ עמלות</div>
-                  <div className="account-card-value highlight-negative">{formatNumber(stocksSummary.totalFees)}$</div>
-                </div>
-                <div className="account-card">
-                  <div className="account-card-label">סה"כ דיבידנד</div>
-                  <div className="account-card-value highlight-positive">
-                    {stocksSummary.totalDividends > 0 ? `${formatNumber(stocksSummary.totalDividends)}$` : '0$'}
-                  </div>
-                </div>
-                <div className="account-card">
-                  <div className="account-card-label">מס סה"כ דיבידנד</div>
-                  <div className="account-card-value highlight-negative">
-                    {stocksSummary.totalTaxes > 0 ? `${formatNumber(stocksSummary.totalTaxes)}$` : '0$'}
-                  </div>
-                </div>
-                <div className="account-card">
-                  <div className="account-card-label">סה"כ מס רווחי הון</div>
-                  <div className="account-card-value highlight-negative">
-                    {stocksSummary.totalCapitalGainsTax > 0 ? `${formatNumber(stocksSummary.totalCapitalGainsTax)}₪` : '0₪'}
-                  </div>
-                </div>
-              </div>
+              </>
             )}
           </div>
         ) : (

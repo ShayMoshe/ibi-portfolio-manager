@@ -7,6 +7,8 @@ export interface Column<T> {
   label: string;
   sortable?: boolean;
   filterable?: boolean;
+  filterType?: 'text' | 'date';
+  sortComparator?: (a: unknown, b: unknown) => number;
   render?: (value: unknown, row: T) => React.ReactNode;
 }
 
@@ -23,9 +25,12 @@ const SortableTable = <T extends Record<string, unknown>>({
   getRowKey,
   emptyMessage = "אין נתונים להצגה.",
 }: SortableTableProps<T>) => {
-  const [sortColumn, setSortColumn] = useState<string | null>(null);
-  const [sortDirection, setSortDirection] = useState<SortDirection>(null);
+  // Initialize with date column sorted desc if exists
+  const dateColumn = columns.find(col => col.filterType === 'date');
+  const [sortColumn, setSortColumn] = useState<string | null>(dateColumn?.key || null);
+  const [sortDirection, setSortDirection] = useState<SortDirection>(dateColumn ? 'desc' : null);
   const [filters, setFilters] = useState<Record<string, string>>({});
+  const [showFilters, setShowFilters] = useState(false);
 
   const handleSort = (columnKey: string) => {
     if (sortColumn === columnKey) {
@@ -68,9 +73,17 @@ const SortableTable = <T extends Record<string, unknown>>({
 
     // Apply sorting
     if (sortColumn && sortDirection) {
+      const column = columns.find(col => col.key === sortColumn);
+      
       result.sort((a, b) => {
         const aValue = a[sortColumn];
         const bValue = b[sortColumn];
+
+        // Use custom comparator if provided
+        if (column?.sortComparator) {
+          const comparison = column.sortComparator(aValue, bValue);
+          return sortDirection === "asc" ? comparison : -comparison;
+        }
 
         const aStr = String(aValue ?? "");
         const bStr = String(bValue ?? "");
@@ -91,10 +104,27 @@ const SortableTable = <T extends Record<string, unknown>>({
     }
 
     return result;
-  }, [data, filters, sortColumn, sortDirection]);
+  }, [data, filters, sortColumn, sortDirection, columns]);
 
   return (
     <div className="table-wrap">
+      <div style={{ marginBottom: '10px', textAlign: 'right' }}>
+        <button
+          type="button"
+          onClick={() => setShowFilters(!showFilters)}
+          style={{
+            padding: '6px 12px',
+            backgroundColor: showFilters ? '#4CAF50' : '#f0f0f0',
+            color: showFilters ? 'white' : '#333',
+            border: '1px solid #ddd',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            fontSize: '14px',
+          }}
+        >
+          {showFilters ? '🔍 הסתר סינון' : '🔍 הצג סינון'}
+        </button>
+      </div>
       <table>
         <thead>
           <tr>
@@ -118,7 +148,7 @@ const SortableTable = <T extends Record<string, unknown>>({
                     <span>{column.label}</span>
                   )}
                 </div>
-                {column.filterable && (
+                {column.filterable && showFilters && (
                   <input
                     type="text"
                     className="filter-input"
