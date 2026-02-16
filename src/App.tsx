@@ -183,7 +183,7 @@ const App = () => {
   const [status, setStatus] = useState<string>("Upload XLSX files to begin.");
   const [validationError, setValidationError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<"summary" | "table">("summary");
+  const [activeTab, setActiveTab] = useState<"summary" | "table" | "account">("summary");
   const [showOnlyActive, setShowOnlyActive] = useState(false);
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
 
@@ -203,32 +203,56 @@ const App = () => {
     const allStocks = uniqueSymbols.map((symbol) => {
       let quantity = 0;
       let totalFees = 0;
+      let totalDividends = 0;
+      let totalTaxes = 0;
       
       rows.forEach((row) => {
         const ticker = row["מס' נייר / סימבול"].trim();
-        if (ticker !== symbol) return;
-        
         const actionType = row["סוג פעולה"].trim();
-        const amountStr = row["כמות"].trim();
-        const amount = parseFloat(amountStr) || 0;
+        const stockName = row["שם נייר"].trim();
         
-        // Calculate quantity
-        if (actionType === "קניה חול מטח" || actionType === "הטבה") {
-          quantity += amount;
-        } else if (actionType === "מכירה חול מטח") {
-          quantity -= amount;
+        // Calculate quantity for this ticker
+        if (ticker === symbol) {
+          const amountStr = row["כמות"].trim();
+          const amount = parseFloat(amountStr) || 0;
+          
+          if (actionType === "קניה חול מטח" || actionType === "הטבה") {
+            quantity += amount;
+          } else if (actionType === "מכירה חול מטח") {
+            quantity -= amount;
+          }
+          
+          // Sum transaction fees
+          const feeStr = row["עמלת פעולה"].trim();
+          const fee = parseFloat(feeStr) || 0;
+          totalFees += Math.abs(fee);
         }
         
-        // Sum transaction fees
-        const feeStr = row["עמלת פעולה"].trim();
-        const fee = parseFloat(feeStr) || 0;
-        totalFees += Math.abs(fee); // Use absolute value in case fees are negative
+        // Calculate dividends - check if stock name contains the ticker symbol
+        if (actionType === "הפקדה דיבידנד מטח" && stockName.includes(symbol)) {
+          const dividendStr = row["כמות"].trim();
+          const dividend = parseFloat(dividendStr) || 0;
+          totalDividends += Math.abs(dividend);
+        }
+        
+        // Calculate taxes - check if stock name contains the ticker symbol
+        if (actionType === "משיכת מס חול מטח" && stockName.includes(symbol)) {
+          const taxStr = row["כמות"].trim();
+          const tax = parseFloat(taxStr) || 0;
+          totalTaxes += Math.abs(tax);
+        }
       });
       
       return { 
         TICKER: symbol,
         "כמות במניה": quantity.toFixed(2),
-        "עמלת פעולה": totalFees.toFixed(2),
+        'סה"כ עמלות': `${totalFees.toFixed(2)}$`,
+        'סה"כ דיבידנד': `${totalDividends.toFixed(2)}$`,
+        'סה"כ מס': `${totalTaxes.toFixed(2)}$`,
+        _rawQuantity: quantity,
+        _rawFees: totalFees,
+        _rawDividends: totalDividends,
+        _rawTaxes: totalTaxes,
       };
     });
     
@@ -239,7 +263,85 @@ const App = () => {
     return allStocks;
   }, [uniqueSymbols, rows, showOnlyActive]);
 
-  const stocksTableColumns = useMemo<TableColumn<{ TICKER: string; "כמות במניה": string; "עמלת פעולה": string }>[]>(
+  const stocksSummary = useMemo(() => {
+    // Calculate summary from all stocks (before filtering)
+    const allStocksData = uniqueSymbols.map((symbol) => {
+      let quantity = 0;
+      let totalFees = 0;
+      let totalDividends = 0;
+      let totalTaxes = 0;
+      
+      rows.forEach((row) => {
+        const ticker = row["מס' נייר / סימבול"].trim();
+        const actionType = row["סוג פעולה"].trim();
+        const stockName = row["שם נייר"].trim();
+        
+        if (ticker === symbol) {
+          const amountStr = row["כמות"].trim();
+          const amount = parseFloat(amountStr) || 0;
+          
+          if (actionType === "קניה חול מטח" || actionType === "הטבה") {
+            quantity += amount;
+          } else if (actionType === "מכירה חול מטח") {
+            quantity -= amount;
+          }
+          
+          const feeStr = row["עמלת פעולה"].trim();
+          const fee = parseFloat(feeStr) || 0;
+          totalFees += Math.abs(fee);
+        }
+        
+        if (actionType === "הפקדה דיבידנד מטח" && stockName.includes(symbol)) {
+          const dividendStr = row["כמות"].trim();
+          const dividend = parseFloat(dividendStr) || 0;
+          totalDividends += Math.abs(dividend);
+        }
+        
+        if (actionType === "משיכת מס חול מטח" && stockName.includes(symbol)) {
+          const taxStr = row["כמות"].trim();
+          const tax = parseFloat(taxStr) || 0;
+          totalTaxes += Math.abs(tax);
+        }
+      });
+      
+      return { quantity, totalFees, totalDividends, totalTaxes };
+    });
+    
+    // Calculate total cash transfers (in ILS)
+    let totalCashTransfers = 0;
+    let totalBenefitsAndOther = 0;
+    let totalCapitalGainsTax = 0;
+    rows.forEach((row) => {
+      const actionType = row["סוג פעולה"].trim();
+      const ticker = row["מס' נייר / סימבול"].trim();
+      const amountStr = row["תמורה בשקלים"].trim();
+      const amount = parseFloat(amountStr) || 0;
+      
+      if (actionType === "העברה מזומן בשח") {
+        totalCashTransfers += Math.abs(amount);
+      } else if (ticker === "900") {
+        // Any transaction with ticker 900 that is not a cash transfer is benefits/other
+        totalBenefitsAndOther += Math.abs(amount);
+      }
+      
+      // Calculate capital gains tax
+      if (ticker === "9992983") {
+        totalCapitalGainsTax += amount * -1;
+      }
+    });
+    
+    return {
+      totalQuantity: allStocksData.reduce((sum, s) => sum + s.quantity, 0),
+      totalFees: allStocksData.reduce((sum, s) => sum + s.totalFees, 0),
+      totalDividends: allStocksData.reduce((sum, s) => sum + s.totalDividends, 0),
+      totalTaxes: allStocksData.reduce((sum, s) => sum + s.totalTaxes, 0),
+      totalCashTransfers,
+      totalBenefitsAndOther,
+      totalCapitalGainsTax,
+    };
+  }, [uniqueSymbols, rows]);
+
+  const stocksTableColumns = useMemo<TableColumn<{ TICKER: string; "כמות במניה": string; 'סה"כ עמלות': string; 'סה"כ דיבידנד': string; 'סה"כ מס': string }>[]>(
     () => [
       {
         key: "TICKER",
@@ -262,10 +364,36 @@ const App = () => {
         filterable: false,
       },
       {
-        key: "עמלת פעולה",
-        label: "עמלת פעולה",
+        key: 'סה"כ עמלות',
+        label: 'סה"כ עמלות',
         sortable: true,
         filterable: false,
+      },
+      {
+        key: 'סה"כ דיבידנד',
+        label: 'סה"כ דיבידנד',
+        sortable: true,
+        filterable: false,
+        render: (value) => {
+          const strValue = String(value);
+          if (strValue === '0.00$' || strValue === '0$') {
+            return '-';
+          }
+          return strValue;
+        },
+      },
+      {
+        key: 'סה"כ מס',
+        label: 'סה"כ מס',
+        sortable: true,
+        filterable: false,
+        render: (value) => {
+          const strValue = String(value);
+          if (strValue === '0.00$' || strValue === '0$') {
+            return '-';
+          }
+          return strValue;
+        },
       },
     ],
     []
@@ -388,6 +516,16 @@ const App = () => {
     loadDevFiles();
   }, []); // Run once on mount
 
+  const formatNumber = (value: number): string => {
+    // Round to 2 decimal places
+    const rounded = Math.round(value * 100) / 100;
+    // Check if it's a whole number
+    if (rounded === Math.floor(rounded)) {
+      return rounded.toLocaleString('en-US');
+    }
+    return rounded.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+
   return (
     <div className="page">
       {selectedTicker ? (
@@ -443,6 +581,15 @@ const App = () => {
             <button
               type="button"
               role="tab"
+              aria-selected={activeTab === "account"}
+              className={activeTab === "account" ? "tab active" : "tab"}
+              onClick={() => setActiveTab("account")}
+            >
+              חשבון
+            </button>
+            <button
+              type="button"
+              role="tab"
               aria-selected={activeTab === "table"}
               className={activeTab === "table" ? "tab active" : "tab"}
               onClick={() => setActiveTab("table")}
@@ -482,6 +629,49 @@ const App = () => {
                 getRowKey={(row) => row.TICKER}
                 emptyMessage="לא נמצאו מניות להצגה."
               />
+            )}
+          </div>
+        ) : activeTab === "account" ? (
+          <div className="account-panel">
+            <h3>סיכום חשבון</h3>
+            {rows.length === 0 || validationError ? (
+              <p className="empty">
+                {validationError
+                  ? "לא ניתן להציג נתונים עד לתיקון שגיאות האימות."
+                  : "עדיין אין נתונים להצגה."}
+              </p>
+            ) : (
+              <div className="account-summary-grid">
+                <div className="account-card">
+                  <div className="account-card-label">סה"כ הפקדות</div>
+                  <div className="account-card-value highlight-positive">{formatNumber(stocksSummary.totalCashTransfers)}₪</div>
+                  {stocksSummary.totalBenefitsAndOther > 0 && (
+                    <div className="account-card-subtext">+{formatNumber(stocksSummary.totalBenefitsAndOther)}₪ הטבות/שונות</div>
+                  )}
+                </div>
+                <div className="account-card">
+                  <div className="account-card-label">סה"כ עמלות</div>
+                  <div className="account-card-value highlight-negative">{formatNumber(stocksSummary.totalFees)}$</div>
+                </div>
+                <div className="account-card">
+                  <div className="account-card-label">סה"כ דיבידנד</div>
+                  <div className="account-card-value highlight-positive">
+                    {stocksSummary.totalDividends > 0 ? `${formatNumber(stocksSummary.totalDividends)}$` : '0$'}
+                  </div>
+                </div>
+                <div className="account-card">
+                  <div className="account-card-label">מס סה"כ דיבידנד</div>
+                  <div className="account-card-value highlight-negative">
+                    {stocksSummary.totalTaxes > 0 ? `${formatNumber(stocksSummary.totalTaxes)}$` : '0$'}
+                  </div>
+                </div>
+                <div className="account-card">
+                  <div className="account-card-label">סה"כ מס רווחי הון</div>
+                  <div className="account-card-value highlight-negative">
+                    {stocksSummary.totalCapitalGainsTax > 0 ? `${formatNumber(stocksSummary.totalCapitalGainsTax)}₪` : '0₪'}
+                  </div>
+                </div>
+              </div>
             )}
           </div>
         ) : (

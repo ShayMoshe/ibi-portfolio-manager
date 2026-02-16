@@ -2,6 +2,8 @@
 
 This is a frontend-only React SPA built with Vite. It lets you upload one or more XLSX files and merges all rows from every sheet into a single table with real-time stock prices.
 
+🌐 **Live Demo:** [https://shaymoshe.github.io/ibi-portfolio-manager/](https://shaymoshe.github.io/ibi-portfolio-manager/)
+
 ## Features
 
 - 📊 Upload and parse multiple XLSX files
