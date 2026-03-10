@@ -890,7 +890,7 @@ const App = () => {
                               );
                             }}
                           />
-                          <Bar dataKey="amount" fill="#0f172a" radius={[6, 6, 0, 0]} />
+                          <Bar dataKey="amount" fill="#22c55e" radius={[6, 6, 0, 0]} />
                         </BarChart>
                       </ResponsiveContainer>
                     </div>

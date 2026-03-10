@@ -144,16 +144,19 @@ const StockDetail = ({ ticker, rows, onBack }: StockDetailProps) => {
   const dividendRows = useMemo(() => {
     const byDate = new Map<string, { timestamp: number; dateLabel: string; dividend: number; tax: number }>();
 
+    const stockPattern = new RegExp(`\\/\\s*${ticker}\\s+US`, "i");
+
     rows.forEach((row) => {
       const actionType = String(row["סוג פעולה"] ?? "").trim();
       const stockName = String(row["שם נייר"] ?? "").trim();
-      if (!stockName.includes(ticker)) {
-        return;
-      }
 
       const isDividend = actionType === "הפקדה דיבידנד מטח";
       const isTax = actionType === "משיכת מס חול מטח";
       if (!isDividend && !isTax) {
+        return;
+      }
+
+      if (!stockPattern.test(stockName)) {
         return;
       }
 
