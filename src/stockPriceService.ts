@@ -44,6 +44,19 @@ const saveToLocalStorage = <T>(key: string, data: T, timestamp: number): void =>
   }
 };
 
+export const getCachedStockPrice = (symbol: string): StockPrice | null => {
+  const now = Date.now();
+  const inMemory = cache.get(symbol);
+  if (inMemory && now - inMemory.timestamp < CACHE_DURATION) {
+    return inMemory.data;
+  }
+  const local = getFromLocalStorage<StockPrice>(`stock_price_${symbol}`);
+  if (local && now - local.timestamp < LOCAL_STORAGE_CACHE_DURATION) {
+    return local.data;
+  }
+  return null;
+};
+
 export const fetchStockPrice = async (symbol: string): Promise<StockPrice | null> => {
   const now = Date.now();
   const cached = cache.get(symbol);

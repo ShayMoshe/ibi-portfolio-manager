@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
-import { Area, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { fetchHistoricalData, fetchStockPrice, HistoricalDataPoint, StockPrice, RateLimitError } from "./stockPriceService";
+import { fetchStockPrice, getCachedStockPrice, StockPrice, RateLimitError } from "./stockPriceService";
 
 interface StockDetailProps {
   ticker: string;
@@ -11,11 +10,8 @@ interface StockDetailProps {
 
 const StockDetail = ({ ticker, rows, onBack }: StockDetailProps) => {
   const [price, setPrice] = useState<StockPrice | null>(null);
-  const [historicalData, setHistoricalData] = useState<HistoricalDataPoint[]>([]);
   const [isPriceLoading, setIsPriceLoading] = useState(true);
-  const [isHistoryLoading, setIsHistoryLoading] = useState(true);
   const [priceError, setPriceError] = useState<string | null>(null);
-  const [historyError, setHistoryError] = useState<string | null>(null);
 
   const formatNumber = (value: number): string => {
     const rounded = Math.round(value * 100) / 100;
@@ -141,6 +137,27 @@ const StockDetail = ({ ticker, rows, onBack }: StockDetailProps) => {
   }, [rows, ticker]);
 
 
+  // רק הפעולות מהרכישה האחרונה אחרי שמכרנו הכל
+  const currentHoldingRows = useMemo(() => {
+    let lastZeroIndex = -1;
+    transactionRows.forEach((row, i) => {
+      if (row.cumulative === 0) lastZeroIndex = i;
+    });
+    return transactionRows.slice(lastZeroIndex + 1);
+  }, [transactionRows]);
+
+  const weightedAvgPrice = useMemo(() => {
+    let totalCost = 0;
+    let totalQty = 0;
+    currentHoldingRows.forEach((row) => {
+      if (row.actionLabel === "קנייה" || row.actionLabel === "הטבה") {
+        totalCost += row.price * row.quantity;
+        totalQty += row.quantity;
+      }
+    });
+    return totalQty > 0 ? totalCost / totalQty : null;
+  }, [currentHoldingRows]);
+
   const dividendRows = useMemo(() => {
     const byDate = new Map<string, { timestamp: number; dateLabel: string; dividend: number; tax: number }>();
 
@@ -206,66 +223,61 @@ const StockDetail = ({ ticker, rows, onBack }: StockDetailProps) => {
     );
   }, [dividendRows]);
 
+  const breakEvenPrice = useMemo(() => {
+    const currentQty = currentHoldingRows.length > 0 ? currentHoldingRows[currentHoldingRows.length - 1].cumulative : 0;
+    if (currentQty <= 0) return null;
+
+    const totalCost = currentHoldingRows.reduce((sum, row) => {
+      if (row.actionLabel === "קנייה" || row.actionLabel === "הטבה") {
+        return sum + row.price * row.quantity;
+      }
+      return sum;
+    }, 0);
+
+    const totalFees = currentHoldingRows.reduce((sum, row) => sum + row.fee, 0);
+    const sellFee = 7.5;
+
+    // דיבידנדים רק מתקופת ההחזקה הנוכחית
+    const holdingStartTimestamp = currentHoldingRows.length > 0 ? currentHoldingRows[0].timestamp : 0;
+    const currentHoldingDividendsNet = dividendRows
+      .filter((row) => row.timestamp >= holdingStartTimestamp)
+      .reduce((sum, row) => sum + row.net, 0);
+
+    return (totalCost + totalFees + sellFee - currentHoldingDividendsNet) / currentQty;
+  }, [currentHoldingRows, dividendRows]);
+
+  const profit100Price = useMemo(() => {
+    if (breakEvenPrice === null) return null;
+    const currentQty = currentHoldingRows[currentHoldingRows.length - 1].cumulative;
+    // כדי להרוויח $100 נטו אחרי 25% מס צריך רווח ברוטו של 100/0.75
+    const grossProfitNeeded = 100 / 0.75;
+    return breakEvenPrice + grossProfitNeeded / currentQty;
+  }, [breakEvenPrice, currentHoldingRows]);
+
   useEffect(() => {
     const loadData = async () => {
       setIsPriceLoading(true);
-      setIsHistoryLoading(true);
       setPriceError(null);
-      setHistoryError(null);
-      setPrice(null);
-      setHistoricalData([]);
+      const cached = getCachedStockPrice(ticker);
+      if (cached) setPrice(cached);
 
-      const [priceResult, historyResult] = await Promise.allSettled([
-        fetchStockPrice(ticker),
-        fetchHistoricalData(ticker),
-      ]);
-
-      if (priceResult.status === "fulfilled") {
-        setPrice(priceResult.value);
-      } else {
-        console.error("Failed to load stock price:", priceResult.reason);
-        if (priceResult.reason instanceof RateLimitError) {
+      try {
+        const priceData = await fetchStockPrice(ticker);
+        if (priceData) setPrice(priceData);
+      } catch (err) {
+        console.error("Failed to load stock price:", err);
+        if (err instanceof RateLimitError) {
           setPriceError("הגעת למגבלת השימוש היומית של ה-API עבור מחיר המניה. נסה שוב מאוחר יותר.");
         } else {
           setPriceError("שגיאה בטעינת מחיר המניה. נסה שוב מאוחר יותר.");
         }
       }
 
-      if (historyResult.status === "fulfilled") {
-        setHistoricalData(historyResult.value);
-      } else {
-        console.error("Failed to load historical data:", historyResult.reason);
-        if (historyResult.reason instanceof RateLimitError) {
-          setHistoryError("הגעת למגבלת השימוש היומית של ה-API עבור הגרף. נסה שוב מאוחר יותר.");
-        } else {
-          setHistoryError("שגיאה בטעינת נתוני הגרף. נסה שוב מאוחר יותר.");
-        }
-      }
-
       setIsPriceLoading(false);
-      setIsHistoryLoading(false);
     };
 
     loadData();
   }, [ticker]);
-
-  const formatDate = (dateStr: string) => {
-    const date = new Date(dateStr);
-    return date.toLocaleDateString("he-IL", { month: "short", day: "numeric" });
-  };
-
-  const CustomTooltip = ({ active, payload }: any) => {
-    if (active && payload && payload.length) {
-      return (
-        <div className="chart-tooltip">
-          <p className="tooltip-date">{formatDate(payload[0].payload.date)}</p>
-          <p className="tooltip-price">${payload[0].value.toFixed(2)}</p>
-          <p className="tooltip-label">מחיר סגירה</p>
-        </div>
-      );
-    }
-    return null;
-  };
 
   return (
     <div className="stock-detail">
@@ -273,10 +285,9 @@ const StockDetail = ({ ticker, rows, onBack }: StockDetailProps) => {
         ← חזרה לרשימת מניות
       </button>
 
-      {(priceError || historyError) && (
+      {priceError && (
         <div className="error-message">
-          {priceError && <p>⚠️ {priceError}</p>}
-          {historyError && <p>⚠️ {historyError}</p>}
+          <p>⚠️ {priceError}</p>
           <p className="error-hint">הנתונים המוצגים עשויים להיות מהזיכרון המטמון (עד 24 שעות)</p>
         </div>
       )}
@@ -329,58 +340,27 @@ const StockDetail = ({ ticker, rows, onBack }: StockDetailProps) => {
           </div>
         </div>
 
-        <div className="chart-card">
-          <div className="chart-header">
-            <h2>מחיר ב-90 הימים האחרונים</h2>
-            {isHistoryLoading && <span className="chart-status">טוען גרף...</span>}
+        <div className="stock-stats-card">
+          <div className="stat-item">
+            <span className="stat-label">מחיר ממוצע משוקלל</span>
+            <span className="stat-value">
+              {weightedAvgPrice !== null ? `$${formatNumber(weightedAvgPrice)}` : "-"}
+            </span>
           </div>
-          {historicalData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={400}>
-              <LineChart data={historicalData} margin={{ top: 10, right: 30, left: 10, bottom: 10 }}>
-                <defs>
-                  <linearGradient id="priceGlow" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#0f172a" stopOpacity={0.2} />
-                    <stop offset="100%" stopColor="#0f172a" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="4 6" stroke="#e2e8f0" />
-                <XAxis
-                  dataKey="date"
-                  tickFormatter={formatDate}
-                  stroke="#64748b"
-                  tickMargin={8}
-                  style={{ fontSize: "0.85rem" }}
-                />
-                <YAxis
-                  domain={["auto", "auto"]}
-                  tickFormatter={(value) => `$${value.toFixed(0)}`}
-                  stroke="#64748b"
-                  width={60}
-                  style={{ fontSize: "0.85rem" }}
-                />
-                <Tooltip content={<CustomTooltip />} />
-                <Area
-                  type="monotone"
-                  dataKey="close"
-                  stroke="none"
-                  fill="url(#priceGlow)"
-                />
-                <Line
-                  type="monotone"
-                  dataKey="close"
-                  stroke="#0f172a"
-                  strokeWidth={2.5}
-                  dot={false}
-                  activeDot={{ r: 6, strokeWidth: 2, stroke: "#0f172a", fill: "#ffffff" }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          ) : isHistoryLoading ? (
-            <div className="loading">טוען נתוני גרף...</div>
-          ) : (
-            <div className="empty">אין נתונים היסטוריים זמינים</div>
-          )}
+          <div className="stat-item">
+            <span className="stat-label">מחיר מכירה ללא הפסד</span>
+            <span className="stat-value">
+              {breakEvenPrice !== null ? `$${formatNumber(breakEvenPrice)}` : "-"}
+            </span>
+          </div>
+          <div className="stat-item">
+            <span className="stat-label">מחיר עם רווח 100$</span>
+            <span className="stat-value">
+              {profit100Price !== null ? `$${formatNumber(profit100Price)}` : "-"}
+            </span>
+          </div>
         </div>
+
           <div className="stock-transactions-card">
             <h2>קניות ומכירות</h2>
             {transactionRows.length === 0 ? (
