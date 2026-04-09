@@ -266,7 +266,8 @@ const App = () => {
   const [validationError, setValidationError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<"summary" | "table" | "account">("summary");
-  const [showOnlyActive, setShowOnlyActive] = useState(false);
+  const [showOnlyActive, setShowOnlyActive] = useState(true);
+  const [showCumulativeDividends, setShowCumulativeDividends] = useState(false);
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
 
   const rowCount = useMemo(() => rows.length, [rows]);
@@ -493,6 +494,89 @@ const App = () => {
     });
 
     return Array.from(monthMap.values()).sort((a, b) => a.timestamp - b.timestamp);
+  }, [rows]);
+
+  const dividendsByMonth = useMemo(() => {
+    type MonthEntry = {
+      monthKey: string;
+      monthLabel: string;
+      timestamp: number;
+      amount: number;
+      cumulativeAmount: number;
+      details: { dateLabel: string; amount: number }[];
+    };
+
+    const dividends: { dateLabel: string; timestamp: number; amount: number }[] = [];
+
+    rows.forEach((row) => {
+      const actionType = row["סוג פעולה"].trim();
+      if (actionType !== "הפקדה דיבידנד מטח") {
+        return;
+      }
+
+      const dateValue = row["תאריך"].trim();
+      const dateLabel = formatDateLabel(dateValue);
+      const timestamp = parseDateToTimestamp(dateValue);
+      const amountStr = row["כמות"].trim();
+      const amount = Math.abs(parseFloat(amountStr) || 0);
+
+      if (!dateLabel || !timestamp || amount === 0) {
+        return;
+      }
+
+      dividends.push({ dateLabel, timestamp, amount });
+    });
+
+    if (dividends.length === 0) {
+      return [] as MonthEntry[];
+    }
+
+    dividends.sort((a, b) => a.timestamp - b.timestamp);
+
+    const monthMap = new Map<string, MonthEntry>();
+    const first = new Date(dividends[0].timestamp);
+    const last = new Date(dividends[dividends.length - 1].timestamp);
+    const start = new Date(first.getFullYear(), first.getMonth(), 1);
+    const end = new Date(last.getFullYear(), last.getMonth(), 1);
+
+    for (let cursor = new Date(start); cursor <= end; cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1)) {
+      const year = cursor.getFullYear();
+      const month = cursor.getMonth() + 1;
+      const monthKey = `${year}-${String(month).padStart(2, "0")}`;
+      const monthLabel = `${String(month).padStart(2, "0")}/${year}`;
+      monthMap.set(monthKey, {
+        monthKey,
+        monthLabel,
+        timestamp: cursor.getTime(),
+        amount: 0,
+        cumulativeAmount: 0,
+        details: [],
+      });
+    }
+
+    dividends.forEach((entry) => {
+      const date = new Date(entry.timestamp);
+      const year = date.getFullYear();
+      const month = date.getMonth() + 1;
+      const monthKey = `${year}-${String(month).padStart(2, "0")}`;
+      const monthEntry = monthMap.get(monthKey);
+      if (!monthEntry) {
+        return;
+      }
+      monthEntry.amount += entry.amount;
+      monthEntry.details.push({ dateLabel: entry.dateLabel, amount: entry.amount });
+    });
+
+    let cumulative = 0;
+    return Array.from(monthMap.values())
+      .sort((a, b) => a.timestamp - b.timestamp)
+      .map((entry) => {
+        cumulative += entry.amount;
+        return {
+          ...entry,
+          cumulativeAmount: cumulative,
+        };
+      });
   }, [rows]);
 
   const stocksTableColumns = useMemo<TableColumn<{ TICKER: string; "כמות במניה": string; 'סה"כ עמלות': string; 'סה"כ דיבידנד': string; 'סה"כ מס': string }>[]>(
@@ -891,6 +975,78 @@ const App = () => {
                             }}
                           />
                           <Bar dataKey="amount" fill="#22c55e" radius={[6, 6, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </div>
+
+                <div className="account-chart-card">
+                  <div className="account-chart-top-row">
+                    <div className="account-chart-header">דיבידנד לפי חודש ($)</div>
+                    <label className="account-chart-toggle">
+                      <input
+                        type="checkbox"
+                        checked={showCumulativeDividends}
+                        onChange={(event) => setShowCumulativeDividends(event.target.checked)}
+                      />
+                      <span>{showCumulativeDividends ? "תצוגה מצטברת" : "תצוגה חודשית"}</span>
+                    </label>
+                  </div>
+
+                  {dividendsByMonth.length === 0 ? (
+                    <div className="account-chart-empty">אין דיבידנדים להצגה.</div>
+                  ) : (
+                    <div className="account-chart">
+                      <ResponsiveContainer width="100%" height={280}>
+                        <BarChart data={dividendsByMonth} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                          <XAxis dataKey="monthLabel" tick={{ fontSize: 12 }} />
+                          <YAxis tick={{ fontSize: 12 }} tickFormatter={(value) => `$${formatNumber(Number(value) || 0)}`} />
+                          <Tooltip
+                            content={({ active, payload }) => {
+                              if (!active || !payload || payload.length === 0) {
+                                return null;
+                              }
+
+                              const data = payload[0].payload as {
+                                monthLabel: string;
+                                amount: number;
+                                cumulativeAmount: number;
+                                details: { dateLabel: string; amount: number }[];
+                              };
+
+                              const displayedAmount = showCumulativeDividends ? data.cumulativeAmount : data.amount;
+
+                              return (
+                                <div className="account-chart-tooltip">
+                                  <div className="account-chart-tooltip-title">חודש: {data.monthLabel}</div>
+                                  <div className="account-chart-tooltip-total">
+                                    {showCumulativeDividends ? "סה\"כ מצטבר" : "סה\"כ חודשי"}: ${formatNumber(displayedAmount)}
+                                  </div>
+                                  <div className="account-chart-tooltip-total">
+                                    סה\"כ חודשי: ${formatNumber(data.amount)}
+                                  </div>
+                                  {data.details.length === 0 ? (
+                                    <div className="account-chart-tooltip-empty">אין דיבידנד בחודש זה.</div>
+                                  ) : (
+                                    <div className="account-chart-tooltip-list">
+                                      {data.details.map((item, index) => (
+                                        <div key={`${item.dateLabel}-${index}`} className="account-chart-tooltip-row">
+                                          <span>{item.dateLabel}</span>
+                                          <span>${formatNumber(item.amount)}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            }}
+                          />
+                          <Bar
+                            dataKey={showCumulativeDividends ? "cumulativeAmount" : "amount"}
+                            fill={showCumulativeDividends ? "#0ea5e9" : "#16a34a"}
+                            radius={[6, 6, 0, 0]}
+                          />
                         </BarChart>
                       </ResponsiveContainer>
                     </div>
