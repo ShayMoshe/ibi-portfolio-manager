@@ -223,9 +223,12 @@ const StockDetail = ({ ticker, rows, onBack }: StockDetailProps) => {
     );
   }, [dividendRows]);
 
+  const currentHoldingQty = useMemo(() => {
+    return currentHoldingRows.length > 0 ? currentHoldingRows[currentHoldingRows.length - 1].cumulative : 0;
+  }, [currentHoldingRows]);
+
   const breakEvenPrice = useMemo(() => {
-    const currentQty = currentHoldingRows.length > 0 ? currentHoldingRows[currentHoldingRows.length - 1].cumulative : 0;
-    if (currentQty <= 0) return null;
+    if (currentHoldingQty <= 0) return null;
 
     const totalCost = currentHoldingRows.reduce((sum, row) => {
       if (row.actionLabel === "קנייה" || row.actionLabel === "הטבה") {
@@ -243,16 +246,72 @@ const StockDetail = ({ ticker, rows, onBack }: StockDetailProps) => {
       .filter((row) => row.timestamp >= holdingStartTimestamp)
       .reduce((sum, row) => sum + row.net, 0);
 
-    return (totalCost + totalFees + sellFee - currentHoldingDividendsNet) / currentQty;
-  }, [currentHoldingRows, dividendRows]);
+    return (totalCost + totalFees + sellFee - currentHoldingDividendsNet) / currentHoldingQty;
+  }, [currentHoldingQty, currentHoldingRows, dividendRows]);
 
-  const profit100Price = useMemo(() => {
-    if (breakEvenPrice === null) return null;
-    const currentQty = currentHoldingRows[currentHoldingRows.length - 1].cumulative;
-    // כדי להרוויח $100 נטו אחרי 25% מס צריך רווח ברוטו של 100/0.75
-    const grossProfitNeeded = 100 / 0.75;
-    return breakEvenPrice + grossProfitNeeded / currentQty;
-  }, [breakEvenPrice, currentHoldingRows]);
+  const profitTargetRows = useMemo(() => {
+    const targets = [100, 200, 300];
+    if (breakEvenPrice === null || currentHoldingQty <= 0) {
+      return targets.map((target) => ({
+        target,
+        price: null as number | null,
+      }));
+    }
+
+    return targets.map((target) => {
+      // כדי להרוויח נטו X אחרי 25% מס צריך רווח ברוטו של X/0.75
+      const grossProfitNeeded = target / 0.75;
+      return {
+        target,
+        price: breakEvenPrice + grossProfitNeeded / currentHoldingQty,
+      };
+    });
+  }, [breakEvenPrice, currentHoldingQty]);
+  // helper used by the targets table and the custom-price input
+  const calculateNetProfit = (sellPrice: number): number | null => {
+    if (breakEvenPrice === null || currentHoldingQty <= 0) {
+      return null;
+    }
+
+    const grossProfit = (sellPrice - breakEvenPrice) * currentHoldingQty;
+    return grossProfit > 0 ? grossProfit * 0.75 : grossProfit;
+  };
+
+  const [customPriceInput, setCustomPriceInput] = useState<string>("");
+
+  const targetTableRows = useMemo(() => {
+    const baseRows = [
+      {
+        id: "break-even",
+        label: "ללא הפסד",
+        price: breakEvenPrice,
+        profit: 0 as number | null,
+        isToday: false,
+      },
+      ...profitTargetRows.map((row) => ({
+        id: `profit-${row.target}`,
+        label: `רווח $${row.target}`,
+        price: row.price,
+        profit: row.target as number | null,
+        isToday: false,
+      })),
+    ];
+
+    const todayRow = {
+      id: "today-price",
+      label: "מחיר היום",
+      price: price?.price ?? null,
+      profit: price ? calculateNetProfit(price.price) : null,
+      isToday: true,
+    };
+
+    return [...baseRows, todayRow].sort((a, b) => {
+      if (a.profit === null && b.profit === null) return 0;
+      if (a.profit === null) return 1;
+      if (b.profit === null) return -1;
+      return a.profit - b.profit;
+    });
+  }, [breakEvenPrice, currentHoldingQty, price, profitTargetRows]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -347,17 +406,49 @@ const StockDetail = ({ ticker, rows, onBack }: StockDetailProps) => {
               {weightedAvgPrice !== null ? `$${formatNumber(weightedAvgPrice)}` : "-"}
             </span>
           </div>
-          <div className="stat-item">
-            <span className="stat-label">מחיר מכירה ללא הפסד</span>
-            <span className="stat-value">
-              {breakEvenPrice !== null ? `$${formatNumber(breakEvenPrice)}` : "-"}
-            </span>
-          </div>
-          <div className="stat-item">
-            <span className="stat-label">מחיר עם רווח 100$</span>
-            <span className="stat-value">
-              {profit100Price !== null ? `$${formatNumber(profit100Price)}` : "-"}
-            </span>
+          <div className="profit-targets-card">
+            <h3>מחירי יעד למכירה</h3>
+            <div className="custom-price-input" style={{ marginBottom: 8 }}>
+              <label style={{ marginRight: 8 }}>הזן מחיר מותאם אישית:</label>
+              <input
+                type="text"
+                value={customPriceInput}
+                onChange={(e) => setCustomPriceInput(e.target.value)}
+                placeholder="מחיר למניה"
+                style={{ width: 120, marginRight: 8 }}
+              />
+              <span>
+                {(() => {
+                  const parsed = parseFloat(customPriceInput.replace(/[,\s\$]/g, ""));
+                  const cp = Number.isFinite(parsed) ? parsed : null;
+                  const profit = cp !== null ? calculateNetProfit(cp) : null;
+                  return profit === null ? "-" : `$${formatNumber(profit)}`;
+                })()}
+              </span>
+            </div>
+            <div className="table-wrap stock-targets-table-wrap">
+              <table className="stock-targets-table">
+                <thead>
+                  <tr>
+                    <th>מחיר למניה</th>
+                    <th>רווח מחושב</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {targetTableRows.map((row) => (
+                    <tr key={row.id}>
+                      <td>
+                        {row.price !== null ? `$${formatNumber(row.price)}` : "-"}
+                        {row.isToday && row.price !== null ? (
+                          <span className="stock-targets-current-label"> (מחיר נוכחי)</span>
+                        ) : null}
+                      </td>
+                      <td>{row.profit !== null ? `$${formatNumber(row.profit)}` : "-"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
 

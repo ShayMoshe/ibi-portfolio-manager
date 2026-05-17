@@ -435,6 +435,7 @@ tbody tr:nth-child(even) {
   flex-wrap: wrap;
   gap: 16px;
   margin-bottom: 0;
+  align-items: stretch;
 }
 
 .stat-item {
@@ -447,6 +448,40 @@ tbody tr:nth-child(even) {
   flex-direction: column;
   gap: 6px;
   min-width: 180px;
+}
+
+.profit-targets-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.06);
+  flex: 1 1 360px;
+}
+
+.profit-targets-card h3 {
+  margin: 0 0 12px;
+  font-size: 1rem;
+  color: #0f172a;
+}
+
+.stock-targets-table-wrap {
+  border-radius: 12px;
+}
+
+.stock-targets-table {
+  min-width: 0;
+}
+
+.stock-targets-table th,
+.stock-targets-table td {
+  padding: 10px 12px;
+}
+
+.stock-targets-current-label {
+  font-size: 0.8rem;
+  font-weight: 400;
+  color: #475569;
 }
 
 .stat-label {
