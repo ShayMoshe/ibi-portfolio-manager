@@ -277,6 +277,15 @@ const StockDetail = ({ ticker, rows, onBack }: StockDetailProps) => {
     return grossProfit > 0 ? grossProfit * 0.75 : grossProfit;
   };
 
+  const calculateNetProfitPercent = (sellPrice: number): number | null => {
+    if (breakEvenPrice === null || currentHoldingQty <= 0) return null;
+    const netProfit = calculateNetProfit(sellPrice);
+    if (netProfit === null) return null;
+    const investedTotal = currentHoldingQty * breakEvenPrice;
+    if (investedTotal === 0) return null;
+    return (netProfit / investedTotal) * 100;
+  };
+
   const [customPriceInput, setCustomPriceInput] = useState<string>("");
 
   const targetTableRows = useMemo(() => {
@@ -443,7 +452,18 @@ const StockDetail = ({ ticker, rows, onBack }: StockDetailProps) => {
                           <span className="stock-targets-current-label"> (מחיר נוכחי)</span>
                         ) : null}
                       </td>
-                      <td>{row.profit !== null ? `$${formatNumber(row.profit)}` : "-"}</td>
+                      <td>
+                        {row.profit !== null ? (
+                          (() => {
+                            const profitLabel = `$${formatNumber(row.profit)}`;
+                            const percent = row.price !== null ? calculateNetProfitPercent(row.price) : null;
+                            const percentLabel = percent !== null ? ` (${percent.toFixed(2)}%)` : "";
+                            return profitLabel + percentLabel;
+                          })()
+                        ) : (
+                          "-"
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
