@@ -865,6 +865,452 @@ tbody tr:nth-child(even) {
   text-shadow: 0 2px 8px rgba(220, 38, 38, 0.2);
 }
 
+/* Profit Chart Card */
+.profit-chart-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.06);
+  flex: 1 1 500px;
+}
+
+.profit-chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.profit-chart-header h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.profit-chart-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.profit-chart-range-label {
+  font-size: 0.82rem;
+  color: #64748b;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.profit-range-slider {
+  width: 130px;
+  cursor: pointer;
+  accent-color: #0f172a;
+  vertical-align: middle;
+}
+
+.profit-chart-custom-input {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+  font-size: 0.88rem;
+  color: #475569;
+}
+
+.profit-custom-price-input {
+  width: 110px;
+  padding: 5px 9px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 0.88rem;
+  font-family: inherit;
+  direction: ltr;
+  text-align: left;
+}
+
+.profit-custom-price-input:focus {
+  outline: none;
+  border-color: #0f172a;
+  box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.08);
+}
+
+.profit-chart-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: #94a3b8;
+  font-size: 0.9rem;
+}
+
+.profit-chart-tooltip {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 10px 14px;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.12);
+  font-size: 0.88rem;
+  line-height: 1.6;
+  direction: rtl;
+}
+
+.profit-val-positive {
+  color: #15803d;
+  font-weight: 600;
+}
+
+.profit-val-negative {
+  color: #b91c1c;
+  font-weight: 600;
+}
+
+.profit-out-of-range {
+  font-weight: 400;
+  font-size: 0.8rem;
+  color: #94a3b8;
+}
+
+.profit-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #f1f5f9;
+}
+
+.profit-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 5px 10px;
+  font-size: 0.8rem;
+}
+
+.profit-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.profit-legend-label {
+  color: #475569;
+  font-weight: 600;
+}
+
+.profit-legend-price {
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.profit-legend-val {
+  font-weight: 700;
+}
+
+/* Closed Position Detail Styles */
+.closed-position-badge {
+  font-size: 0.65rem;
+  padding: 3px 9px;
+  border-radius: 6px;
+  background: #dc2626;
+  color: #ffffff;
+  margin-right: 12px;
+  vertical-align: middle;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.closed-date-range {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: #475569;
+  font-size: 0.95rem;
+  margin-top: 4px;
+}
+
+.closed-duration-pill {
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 0.8rem;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.closed-pnl-hero {
+  margin: 24px 0;
+  padding: 32px;
+  border-radius: 16px;
+  text-align: center;
+  border: 1px solid;
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.06);
+}
+
+.closed-pnl-hero.pnl-profit {
+  background: linear-gradient(135deg, #f0fdf4, #dcfce7);
+  border-color: #86efac;
+}
+
+.closed-pnl-hero.pnl-loss {
+  background: linear-gradient(135deg, #fff1f2, #ffe4e6);
+  border-color: #fca5a5;
+}
+
+.closed-pnl-label {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 600;
+  margin-bottom: 10px;
+  color: #475569;
+}
+
+.closed-pnl-value {
+  font-size: 3rem;
+  font-weight: 800;
+  line-height: 1.1;
+  direction: ltr;
+}
+
+.pnl-profit .closed-pnl-value {
+  color: #15803d;
+}
+
+.pnl-loss .closed-pnl-value {
+  color: #b91c1c;
+}
+
+.closed-pnl-percent {
+  margin-top: 8px;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #475569;
+}
+
+.closed-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin: 0 0 8px;
+}
+
+.closed-summary-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 16px 18px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
+}
+
+.closed-summary-label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #64748b;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.closed-summary-value {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #0f172a;
+  direction: ltr;
+  text-align: right;
+}
+
+/* Shared positive/negative value classes */
+.val-positive {
+  color: #15803d;
+}
+
+.val-negative {
+  color: #b91c1c;
+}
+
+.val-muted {
+  color: #94a3b8;
+  font-style: italic;
+}
+
+/* P&L Breakdown */
+.pnl-breakdown {
+  display: flex;
+  flex-direction: column;
+}
+
+.pnl-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 11px 4px;
+  border-bottom: 1px solid #f1f5f9;
+  font-size: 0.95rem;
+  color: #0f172a;
+}
+
+.pnl-row:last-child {
+  border-bottom: none;
+}
+
+.pnl-row span:last-child {
+  direction: ltr;
+  font-weight: 500;
+}
+
+.pnl-subtotal {
+  border-top: 1px solid #e2e8f0;
+  margin-top: 2px;
+  padding-top: 13px;
+  font-weight: 600;
+}
+
+.pnl-total {
+  border-top: 2px solid #0f172a;
+  margin-top: 4px;
+  padding-top: 14px;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+/* Rounds */
+.closed-rounds-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.closed-round-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 16px 18px;
+  background: #fafafa;
+}
+
+.closed-round-card.round-profit {
+  border-right: 4px solid #22c55e;
+}
+
+.closed-round-card.round-loss {
+  border-right: 4px solid #ef4444;
+}
+
+.closed-round-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.closed-round-number {
+  font-weight: 700;
+  color: #0f172a;
+  font-size: 0.95rem;
+}
+
+.closed-round-dates {
+  color: #64748b;
+  font-size: 0.85rem;
+}
+
+.closed-round-duration {
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 0.78rem;
+  color: #64748b;
+}
+
+.closed-round-pnl {
+  margin-right: auto;
+  font-weight: 700;
+  font-size: 0.95rem;
+  direction: ltr;
+}
+
+.closed-round-stats {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.closed-round-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 80px;
+}
+
+.closed-round-stat span:last-child {
+  font-size: 0.9rem;
+  font-weight: 600;
+  direction: ltr;
+  text-align: right;
+}
+
+/* Round end row in transactions table */
+.round-end-row {
+  border-bottom: 2px solid #0f172a !important;
+}
+
+/* Closed ticker indicators in main table */
+.ticker-link.ticker-link-closed {
+  color: #64748b;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ticker-link.ticker-link-closed:hover {
+  color: #334155;
+}
+
+.ticker-closed-tag {
+  font-size: 0.65rem;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  color: #64748b;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+}
+
+@media (max-width: 768px) {
+  .closed-summary-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .closed-pnl-value {
+    font-size: 2.2rem;
+  }
+
+  .closed-round-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .closed-round-pnl {
+    margin-right: 0;
+  }
+}
+
 @media (max-width: 768px) {
   .account-summary-grid {
     grid-template-columns: 1fr;

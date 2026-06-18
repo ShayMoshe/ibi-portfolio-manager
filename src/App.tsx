@@ -11,6 +11,7 @@ import {
 import SortableTable, { Column as TableColumn } from "./SortableTable";
 import { fetchMultipleStockPrices, StockPrice } from "./stockPriceService";
 import StockDetail from "./StockDetail";
+import ClosedPositionDetail from "./ClosedPositionDetail";
 
 const columns = [
   "תאריך",
@@ -271,6 +272,27 @@ const App = () => {
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
 
   const rowCount = useMemo(() => rows.length, [rows]);
+
+  const closedTickersSet = useMemo(() => {
+    const quantities = new Map<string, number>();
+    rows.forEach((row) => {
+      const sym = row["מס' נייר / סימבול"].trim();
+      const actionType = row["סוג פעולה"].trim();
+      if (!sym || /^\d+$/.test(sym)) return;
+      const amount = parseFloat(row["כמות"].trim()) || 0;
+      const current = quantities.get(sym) ?? 0;
+      if (actionType === "קניה חול מטח" || actionType === "הטבה") {
+        quantities.set(sym, current + amount);
+      } else if (actionType === "מכירה חול מטח") {
+        quantities.set(sym, current - amount);
+      }
+    });
+    const closed = new Set<string>();
+    quantities.forEach((qty, sym) => {
+      if (Math.abs(qty) < 0.01) closed.add(sym);
+    });
+    return closed;
+  }, [rows]);
   const uniqueSymbols = useMemo(() => {
     const symbols = new Set<string>();
     rows.forEach((row) => {
@@ -586,14 +608,20 @@ const App = () => {
         label: "TICKER",
         sortable: true,
         filterable: true,
-        render: (value) => (
-          <button
-            className="ticker-link"
-            onClick={() => setSelectedTicker(String(value))}
-          >
-            {String(value)}
-          </button>
-        ),
+        render: (value) => {
+          const sym = String(value);
+          const isClosed = closedTickersSet.has(sym);
+          return (
+            <button
+              className={isClosed ? "ticker-link ticker-link-closed" : "ticker-link"}
+              onClick={() => setSelectedTicker(sym)}
+              title={isClosed ? "מניה שנמכרה - לחץ לסיכום עסקה" : undefined}
+            >
+              {sym}
+              {isClosed && <span className="ticker-closed-tag">סגור</span>}
+            </button>
+          );
+        },
       },
       {
         key: "כמות במניה",
@@ -783,11 +811,19 @@ const App = () => {
   return (
     <div className="page">
       {selectedTicker ? (
-        <StockDetail
-          ticker={selectedTicker}
-          rows={rows}
-          onBack={() => setSelectedTicker(null)}
-        />
+        closedTickersSet.has(selectedTicker) ? (
+          <ClosedPositionDetail
+            ticker={selectedTicker}
+            rows={rows}
+            onBack={() => setSelectedTicker(null)}
+          />
+        ) : (
+          <StockDetail
+            ticker={selectedTicker}
+            rows={rows}
+            onBack={() => setSelectedTicker(null)}
+          />
+        )
       ) : (
         <>
       <header className="hero">

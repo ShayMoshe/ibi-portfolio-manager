@@ -1,6 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { fetchStockPrice, getCachedStockPrice, StockPrice, RateLimitError } from "./stockPriceService";
+import {
+  AreaChart,
+  Area,
+  CartesianGrid,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ReferenceLine,
+  ReferenceDot,
+  ResponsiveContainer,
+} from "recharts";
 
 interface StockDetailProps {
   ticker: string;
@@ -277,50 +288,61 @@ const StockDetail = ({ ticker, rows, onBack }: StockDetailProps) => {
     return grossProfit > 0 ? grossProfit * 0.75 : grossProfit;
   };
 
-  const calculateNetProfitPercent = (sellPrice: number): number | null => {
-    if (breakEvenPrice === null || currentHoldingQty <= 0) return null;
-    const netProfit = calculateNetProfit(sellPrice);
-    if (netProfit === null) return null;
-    const investedTotal = currentHoldingQty * breakEvenPrice;
-    if (investedTotal === 0) return null;
-    return (netProfit / investedTotal) * 100;
-  };
-
   const [customPriceInput, setCustomPriceInput] = useState<string>("");
+  const [profitRangeMax, setProfitRangeMax] = useState(500);
 
-  const targetTableRows = useMemo(() => {
-    const baseRows = [
-      {
-        id: "break-even",
-        label: "ללא הפסד",
-        price: breakEvenPrice,
-        profit: 0 as number | null,
-        isToday: false,
-      },
-      ...profitTargetRows.map((row) => ({
-        id: `profit-${row.target}`,
-        label: `רווח $${row.target}`,
-        price: row.price,
-        profit: row.target as number | null,
-        isToday: false,
-      })),
-    ];
-
-    const todayRow = {
-      id: "today-price",
-      label: "מחיר היום",
-      price: price?.price ?? null,
-      profit: price ? calculateNetProfit(price.price) : null,
-      isToday: true,
-    };
-
-    return [...baseRows, todayRow].sort((a, b) => {
-      if (a.profit === null && b.profit === null) return 0;
-      if (a.profit === null) return 1;
-      if (b.profit === null) return -1;
-      return a.profit - b.profit;
+  const chartData = useMemo(() => {
+    if (breakEvenPrice === null || currentHoldingQty <= 0) return [];
+    const priceRange = (profitRangeMax / 0.75) / currentHoldingQty;
+    const minPrice = Math.max(0.01, breakEvenPrice - priceRange * 0.4);
+    const maxPrice = breakEvenPrice + priceRange;
+    return Array.from({ length: 121 }, (_, i) => {
+      const p = minPrice + (maxPrice - minPrice) * (i / 120);
+      return {
+        price: parseFloat(p.toFixed(2)),
+        netProfit: parseFloat((calculateNetProfit(p) ?? 0).toFixed(2)),
+      };
     });
-  }, [breakEvenPrice, currentHoldingQty, price, profitTargetRows]);
+  }, [breakEvenPrice, currentHoldingQty, profitRangeMax]);
+
+  const gradientOffset = useMemo(() => {
+    if (!chartData.length) return 100;
+    const max = Math.max(...chartData.map((d) => d.netProfit));
+    const min = Math.min(...chartData.map((d) => d.netProfit));
+    if (max <= 0) return 0;
+    if (min >= 0) return 100;
+    return (max / (max - min)) * 100;
+  }, [chartData]);
+
+  const chartRefDots = useMemo(() => {
+    if (breakEvenPrice === null || currentHoldingQty <= 0 || chartData.length === 0) return [];
+    const minP = chartData[0].price;
+    const maxP = chartData[chartData.length - 1].price;
+    const dots: { key: string; x: number; y: number; fill: string; label: string; profit: number }[] = [];
+
+    if (breakEvenPrice >= minP && breakEvenPrice <= maxP) {
+      dots.push({ key: "be", x: breakEvenPrice, y: 0, fill: "#64748b", label: "ללא הפסד", profit: 0 });
+    }
+    profitTargetRows.forEach((row) => {
+      if (row.price !== null && row.price >= minP && row.price <= maxP) {
+        dots.push({ key: `t${row.target}`, x: row.price, y: row.target, fill: "#15803d", label: `רווח $${row.target}`, profit: row.target });
+      }
+    });
+    if (price?.price && price.price >= minP && price.price <= maxP) {
+      const p = calculateNetProfit(price.price) ?? 0;
+      dots.push({ key: "today", x: price.price, y: p, fill: "#2563eb", label: "מחיר היום", profit: p });
+    }
+    return dots;
+  }, [breakEvenPrice, currentHoldingQty, chartData, profitTargetRows, price]);
+
+  const customPriceForChart = useMemo(() => {
+    const parsed = parseFloat(customPriceInput.replace(/[,\s$]/g, ""));
+    if (!Number.isFinite(parsed) || parsed <= 0) return null;
+    if (breakEvenPrice === null || currentHoldingQty <= 0) return null;
+    const profit = calculateNetProfit(parsed) ?? 0;
+    const inRange = chartData.length > 0 && parsed >= chartData[0].price && parsed <= chartData[chartData.length - 1].price;
+    return { price: parsed, profit, inRange };
+  }, [customPriceInput, breakEvenPrice, currentHoldingQty, chartData]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -415,59 +437,144 @@ const StockDetail = ({ ticker, rows, onBack }: StockDetailProps) => {
               {weightedAvgPrice !== null ? `$${formatNumber(weightedAvgPrice)}` : "-"}
             </span>
           </div>
-          <div className="profit-targets-card">
-            <h3>מחירי יעד למכירה</h3>
-            <div className="custom-price-input" style={{ marginBottom: 8 }}>
-              <label style={{ marginRight: 8 }}>הזן מחיר מותאם אישית:</label>
+          <div className="profit-chart-card">
+            <div className="profit-chart-header">
+              <h3>רווח / הפסד לפי מחיר מכירה</h3>
+              <div className="profit-chart-controls">
+                <span className="profit-chart-range-label">טווח: עד ${formatNumber(profitRangeMax)}</span>
+                <input
+                  type="range"
+                  min={100}
+                  max={5000}
+                  step={100}
+                  value={profitRangeMax}
+                  onChange={(e) => setProfitRangeMax(Number(e.target.value))}
+                  className="profit-range-slider"
+                />
+              </div>
+            </div>
+
+            <div className="profit-chart-custom-input">
+              <span>מחיר מותאם:</span>
               <input
                 type="text"
                 value={customPriceInput}
                 onChange={(e) => setCustomPriceInput(e.target.value)}
-                placeholder="מחיר למניה"
-                style={{ width: 120, marginRight: 8 }}
+                placeholder="הזן מחיר"
+                className="profit-custom-price-input"
               />
-              <span>
-                {(() => {
-                  const parsed = parseFloat(customPriceInput.replace(/[,\s\$]/g, ""));
-                  const cp = Number.isFinite(parsed) ? parsed : null;
-                  const profit = cp !== null ? calculateNetProfit(cp) : null;
-                  return profit === null ? "-" : `$${formatNumber(profit)}`;
-                })()}
-              </span>
+              {customPriceForChart && (
+                <span className={customPriceForChart.profit >= 0 ? "profit-val-positive" : "profit-val-negative"}>
+                  {customPriceForChart.profit >= 0 ? "+" : ""}${formatNumber(customPriceForChart.profit)}
+                  {!customPriceForChart.inRange && <span className="profit-out-of-range"> (מחוץ לטווח)</span>}
+                </span>
+              )}
             </div>
-            <div className="table-wrap stock-targets-table-wrap">
-              <table className="stock-targets-table">
-                <thead>
-                  <tr>
-                    <th>מחיר למניה</th>
-                    <th>רווח מחושב</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {targetTableRows.map((row) => (
-                    <tr key={row.id}>
-                      <td>
-                        {row.price !== null ? `$${formatNumber(row.price)}` : "-"}
-                        {row.isToday && row.price !== null ? (
-                          <span className="stock-targets-current-label"> (מחיר נוכחי)</span>
-                        ) : null}
-                      </td>
-                      <td>
-                        {row.profit !== null ? (
-                          (() => {
-                            const profitLabel = `$${formatNumber(row.profit)}`;
-                            const percent = row.price !== null ? calculateNetProfitPercent(row.price) : null;
-                            const percentLabel = percent !== null ? ` (${percent.toFixed(2)}%)` : "";
-                            return profitLabel + percentLabel;
-                          })()
-                        ) : (
-                          "-"
-                        )}
-                      </td>
-                    </tr>
+
+            {chartData.length > 0 ? (
+              <ResponsiveContainer width="100%" height={260}>
+                <AreaChart data={chartData} margin={{ top: 14, right: 16, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="chartFillGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset={`${gradientOffset}%`} stopColor="#22c55e" stopOpacity={0.22} />
+                      <stop offset={`${gradientOffset}%`} stopColor="#ef4444" stopOpacity={0.22} />
+                    </linearGradient>
+                    <linearGradient id="chartStrokeGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset={`${gradientOffset}%`} stopColor="#22c55e" stopOpacity={1} />
+                      <stop offset={`${gradientOffset}%`} stopColor="#ef4444" stopOpacity={1} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+                  <XAxis
+                    dataKey="price"
+                    tickFormatter={(v) => `$${Number(v).toFixed(0)}`}
+                    tick={{ fontSize: 11, fill: "#64748b" }}
+                    axisLine={{ stroke: "#e2e8f0" }}
+                    tickLine={false}
+                    type="number"
+                    domain={["dataMin", "dataMax"]}
+                    tickCount={6}
+                  />
+                  <YAxis
+                    tickFormatter={(v) => `${Number(v) < 0 ? "-" : ""}$${formatNumber(Math.abs(Number(v)))}`}
+                    tick={{ fontSize: 11, fill: "#64748b" }}
+                    axisLine={false}
+                    tickLine={false}
+                    width={72}
+                  />
+                  <Tooltip
+                    content={({ active, payload }) => {
+                      if (!active || !payload?.length) return null;
+                      const d = payload[0].payload as { price: number; netProfit: number };
+                      return (
+                        <div className="profit-chart-tooltip">
+                          <div>מחיר: <strong>${d.price.toFixed(2)}</strong></div>
+                          <div className={d.netProfit >= 0 ? "profit-val-positive" : "profit-val-negative"}>
+                            רווח נטו: {d.netProfit >= 0 ? "+" : ""}${formatNumber(d.netProfit)}
+                          </div>
+                        </div>
+                      );
+                    }}
+                  />
+                  <ReferenceLine y={0} stroke="#94a3b8" strokeDasharray="5 3" strokeWidth={1} />
+                  <Area
+                    type="monotone"
+                    dataKey="netProfit"
+                    stroke="url(#chartStrokeGradient)"
+                    strokeWidth={2.5}
+                    fill="url(#chartFillGradient)"
+                    dot={false}
+                    activeDot={{ r: 4, strokeWidth: 0 }}
+                    isAnimationActive={false}
+                  />
+                  {chartRefDots.map((dot) => (
+                    <ReferenceDot
+                      key={dot.key}
+                      x={dot.x}
+                      y={dot.y}
+                      r={5}
+                      fill={dot.fill}
+                      stroke="#ffffff"
+                      strokeWidth={2}
+                    />
                   ))}
-                </tbody>
-              </table>
+                  {customPriceForChart?.inRange && (
+                    <ReferenceDot
+                      x={customPriceForChart.price}
+                      y={customPriceForChart.profit}
+                      r={5}
+                      fill="#f59e0b"
+                      stroke="#ffffff"
+                      strokeWidth={2}
+                    />
+                  )}
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="profit-chart-empty">הזן נתוני קנייה לתצוגת הגרף.</div>
+            )}
+
+            <div className="profit-chart-legend">
+              {chartRefDots.map((dot) => (
+                <div key={dot.key} className="profit-legend-item">
+                  <span className="profit-legend-dot" style={{ background: dot.fill }} />
+                  <span className="profit-legend-label">{dot.label}</span>
+                  <span className="profit-legend-price">${formatNumber(dot.x)}</span>
+                  <span className={`profit-legend-val ${dot.profit >= 0 ? "profit-val-positive" : "profit-val-negative"}`}>
+                    {dot.profit >= 0 ? "+" : ""}${formatNumber(dot.profit)}
+                  </span>
+                </div>
+              ))}
+              {customPriceForChart && (
+                <div className="profit-legend-item">
+                  <span className="profit-legend-dot" style={{ background: "#f59e0b" }} />
+                  <span className="profit-legend-label">מותאם</span>
+                  <span className="profit-legend-price">${formatNumber(customPriceForChart.price)}</span>
+                  <span className={`profit-legend-val ${customPriceForChart.profit >= 0 ? "profit-val-positive" : "profit-val-negative"}`}>
+                    {customPriceForChart.profit >= 0 ? "+" : ""}${formatNumber(customPriceForChart.profit)}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         </div>
