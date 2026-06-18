@@ -3,3 +3,6 @@ node_modules
 dist
 .vscode
 dev-data/*.xlsx
+.env
+.env.local
+.env.*.local

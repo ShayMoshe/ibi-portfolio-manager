@@ -9,9 +9,15 @@ import {
   YAxis,
 } from "recharts";
 import SortableTable, { Column as TableColumn } from "./SortableTable";
-import { fetchMultipleStockPrices, StockPrice } from "./stockPriceService";
 import StockDetail from "./StockDetail";
 import ClosedPositionDetail from "./ClosedPositionDetail";
+import Dashboard from "./components/Dashboard";
+import Analytics from "./components/Analytics";
+import PriceAlerts from "./components/PriceAlerts";
+import StockSidebar, { SidebarItem } from "./components/StockSidebar";
+import { usePortfolio } from "./hooks/usePortfolio";
+import { exportToExcel } from "./utils/exportExcel";
+import { formatSignedUsd } from "./utils/format";
 
 const columns = [
   "תאריך",
@@ -266,12 +272,51 @@ const App = () => {
   const [status, setStatus] = useState<string>("Upload XLSX files to begin.");
   const [validationError, setValidationError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<"summary" | "table" | "account">("summary");
-  const [showOnlyActive, setShowOnlyActive] = useState(true);
+  const TAB_NAMES = [
+    "dashboard",
+    "summary",
+    "past",
+    "account",
+    "analytics",
+    "table",
+    "alerts",
+  ] as const;
+  type TabName = (typeof TAB_NAMES)[number];
+
+  const getInitialTab = (): TabName => {
+    const tab = new URLSearchParams(window.location.search).get("tab");
+    return tab && (TAB_NAMES as readonly string[]).includes(tab) ? (tab as TabName) : "dashboard";
+  };
+
+  const [activeTab, setActiveTab] = useState<TabName>(getInitialTab);
+
+  const handleTabChange = (tab: TabName) => {
+    setActiveTab(tab);
+    const params = new URLSearchParams(window.location.search);
+    params.set("tab", tab);
+    window.history.replaceState(null, "", `?${params.toString()}`);
+  };
   const [showCumulativeDividends, setShowCumulativeDividends] = useState(false);
-  const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
+  const [selectedTicker, setSelectedTicker] = useState<string | null>(
+    () => new URLSearchParams(window.location.search).get("ticker")
+  );
+  const [fileNames, setFileNames] = useState<string[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
+
+  // Keep the open stock / past-trade page in the URL so a refresh restores it.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (selectedTicker) {
+      params.set("ticker", selectedTicker);
+    } else {
+      params.delete("ticker");
+    }
+    window.history.replaceState(null, "", `?${params.toString()}`);
+  }, [selectedTicker]);
 
   const rowCount = useMemo(() => rows.length, [rows]);
+
+  const portfolio = usePortfolio(rows);
 
   const closedTickersSet = useMemo(() => {
     const quantities = new Map<string, number>();
@@ -360,13 +405,31 @@ const App = () => {
         _rawTaxes: totalTaxes,
       };
     });
-    
-    if (showOnlyActive) {
-      return allStocks.filter((stock) => parseFloat(stock["כמות במניה"]) !== 0);
-    }
-    
-    return allStocks;
-  }, [uniqueSymbols, rows, showOnlyActive]);
+
+    // Enrich with live valuation from derived positions / live prices.
+    return allStocks.map((stock) => {
+      const pos = portfolio.positions.find((p) => p.symbol === stock.TICKER);
+      const livePrice = portfolio.livePrices.get(stock.TICKER);
+      return {
+        ...stock,
+        avgCost: pos?.avgCost ?? 0,
+        currentPrice: livePrice?.price ?? 0,
+        unrealizedPnLPercent: pos?.unrealizedPnLPercent ?? null,
+        fiftyTwoWeekHigh: livePrice?.fiftyTwoWeekHigh ?? 0,
+        fiftyTwoWeekLow: livePrice?.fiftyTwoWeekLow ?? 0,
+      };
+    });
+  }, [uniqueSymbols, rows, portfolio.positions, portfolio.livePrices]);
+
+  // Split holdings: active (still holds shares) vs. past trades (fully sold).
+  const activeStocksData = useMemo(
+    () => stocksTableData.filter((stock) => Math.abs(stock._rawQuantity) >= 0.01),
+    [stocksTableData]
+  );
+  const inactiveStocksData = useMemo(
+    () => stocksTableData.filter((stock) => Math.abs(stock._rawQuantity) < 0.01),
+    [stocksTableData]
+  );
 
   const stocksSummary = useMemo(() => {
     // Calculate summary from all stocks (before filtering)
@@ -661,8 +724,73 @@ const App = () => {
           return strValue;
         },
       },
+      {
+        key: "avgCost",
+        label: "עלות ממוצעת",
+        sortable: true,
+        filterable: false,
+        render: (value) => {
+          const n = Number(value);
+          return n > 0 ? <span className="mono">${n.toFixed(2)}</span> : <span className="val-muted">—</span>;
+        },
+      },
+      {
+        key: "currentPrice",
+        label: "מחיר נוכחי",
+        sortable: true,
+        filterable: false,
+        render: (value) => {
+          const n = Number(value);
+          return n > 0 ? <span className="mono">${n.toFixed(2)}</span> : <span className="val-muted">—</span>;
+        },
+      },
+      {
+        key: "unrealizedPnLPercent",
+        label: "תשואה",
+        sortable: true,
+        filterable: false,
+        render: (value) => {
+          if (value === null || value === undefined) return <span className="val-muted">—</span>;
+          const n = Number(value);
+          return (
+            <span className={`mono ${n >= 0 ? "val-positive" : "val-negative"}`}>
+              {n >= 0 ? "+" : ""}
+              {n.toFixed(1)}%
+            </span>
+          );
+        },
+      },
+      {
+        key: "fiftyTwoWeekHigh",
+        label: "52W",
+        sortable: false,
+        filterable: false,
+        render: (high, row) => {
+          const h = Number(high);
+          const l = Number((row as Record<string, unknown>).fiftyTwoWeekLow);
+          const price = Number((row as Record<string, unknown>).currentPrice);
+          if (!h || !price) return <span className="val-muted">—</span>;
+          const pctFromHigh = ((price - h) / h) * 100;
+          const pctFromLow = l > 0 ? ((price - l) / l) * 100 : null;
+          if (pctFromHigh >= -5) {
+            return (
+              <span className="badge badge-green" title={`${pctFromHigh.toFixed(1)}% מהשיא`}>
+                📈 High
+              </span>
+            );
+          }
+          if (pctFromLow !== null && pctFromLow <= 10) {
+            return (
+              <span className="badge badge-red" title={`${pctFromLow.toFixed(1)}% מהשפל`}>
+                📉 Low
+              </span>
+            );
+          }
+          return <span className="val-muted">—</span>;
+        },
+      },
     ],
-    []
+    [closedTickersSet]
   );
 
   const transactionsTableColumns = useMemo<TableColumn<Row>[]>(
@@ -710,6 +838,7 @@ const App = () => {
         allRows.push(...parseWorkbook(workbook));
       }
 
+      setFileNames(fileArray.map((file) => file.name));
       setRows(allRows);
       if (allRows.length === 0) {
         setValidationError(null);
@@ -734,9 +863,60 @@ const App = () => {
 
   const handleClear = () => {
     setRows([]);
+    setFileNames([]);
     setValidationError(null);
     setStatus("Upload XLSX files to begin.");
   };
+
+  const handleExportStocks = (data: typeof stocksTableData, filename: string) => {
+    exportToExcel(
+      data.map((s) => ({
+        מניה: s.TICKER,
+        כמות: s._rawQuantity,
+        "עמלות ($)": s._rawFees,
+        "דיבידנד ($)": s._rawDividends,
+        "מס ($)": s._rawTaxes,
+      })),
+      filename,
+      "מניות"
+    );
+  };
+
+  const handleExportTransactions = () => {
+    exportToExcel(rows as unknown as Record<string, unknown>[], "ibi_transactions", "פעולות");
+  };
+
+  // Keyboard shortcuts: 1-7 switch tabs, R refreshes prices, E exports current tab.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+      const tabMap: Record<string, TabName> = {
+        "1": "dashboard",
+        "2": "summary",
+        "3": "past",
+        "4": "account",
+        "5": "analytics",
+        "6": "table",
+        "7": "alerts",
+      };
+      if (tabMap[e.key]) {
+        handleTabChange(tabMap[e.key]);
+        return;
+      }
+      if (e.key === "r" || e.key === "R") {
+        portfolio.refreshPrices();
+        return;
+      }
+      if (e.key === "e" || e.key === "E") {
+        if (activeTab === "summary") handleExportStocks(activeStocksData, "ibi_active_stocks");
+        else if (activeTab === "past") handleExportStocks(inactiveStocksData, "ibi_past_trades");
+        else if (activeTab === "table") handleExportTransactions();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, activeStocksData, inactiveStocksData]);
 
   // Auto-load dev files in development mode
   useEffect(() => {
@@ -773,6 +953,7 @@ const App = () => {
           allRows.push(...parseWorkbook(workbook));
         }
 
+        setFileNames(fileKeys.map((key) => key.split("/").pop() ?? key));
         setRows(allRows);
         if (allRows.length === 0) {
           setValidationError(null);
@@ -808,107 +989,198 @@ const App = () => {
     return rounded.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
 
+  // Quick-switch sidebar list for the detail view — the group the user drilled
+  // in from (active holdings from ראשי, closed positions from עסקאות עבר).
+  const detailList = activeTab === "past" ? inactiveStocksData : activeStocksData;
+  const perfBySymbol = new Map(portfolio.stockPerformance.map((s) => [s.symbol, s]));
+  const sidebarItems: SidebarItem[] = detailList.map((stock) => {
+    if (activeTab === "past") {
+      const pnl = perfBySymbol.get(stock.TICKER)?.finalPnL ?? 0;
+      return {
+        ticker: stock.TICKER,
+        sub: formatSignedUsd(pnl),
+        subKind: pnl >= 0 ? "positive" : "negative",
+      };
+    }
+    const pct = stock.unrealizedPnLPercent;
+    return {
+      ticker: stock.TICKER,
+      sub: pct != null ? `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%` : undefined,
+      subKind: pct != null ? (pct >= 0 ? "positive" : "negative") : "neutral",
+    };
+  });
+
   return (
     <div className="page">
       {selectedTicker ? (
-        closedTickersSet.has(selectedTicker) ? (
-          <ClosedPositionDetail
-            ticker={selectedTicker}
-            rows={rows}
-            onBack={() => setSelectedTicker(null)}
+        <div className="detail-layout">
+          <StockSidebar
+            title={activeTab === "past" ? "עסקאות עבר" : "מניות פעילות"}
+            items={sidebarItems}
+            selected={selectedTicker}
+            onSelect={setSelectedTicker}
           />
-        ) : (
-          <StockDetail
-            ticker={selectedTicker}
-            rows={rows}
-            onBack={() => setSelectedTicker(null)}
-          />
-        )
+          <div className="detail-main">
+            {closedTickersSet.has(selectedTicker) ? (
+              <ClosedPositionDetail
+                ticker={selectedTicker}
+                rows={rows}
+                onBack={() => setSelectedTicker(null)}
+              />
+            ) : (
+              <StockDetail
+                ticker={selectedTicker}
+                rows={rows}
+                onBack={() => setSelectedTicker(null)}
+                portfolioValue={portfolio.summary.totalMarketValue}
+              />
+            )}
+          </div>
+        </div>
       ) : (
         <>
-      <header className="hero">
-        <div>
-          <p className="eyebrow">IBI Portfolio Manager</p>
-          <h1>IBI Analysis</h1>
-        </div>
-        <div className="actions">
-          {rows.length === 0 ? (
-            <>
-              <label className="upload">
-                <input
-                  type="file"
-                  accept=".xlsx"
-                  multiple
-                  onChange={(event) => handleFiles(event.target.files)}
-                  disabled={isLoading}
-                />
-                {isLoading ? "Parsing..." : "בחרו קבצים"}
-              </label>
-              <p className="status" aria-live="polite">
-                {status}
-              </p>
-            </>
-          ) : (
-            <button className="ghost" type="button" onClick={handleClear}>
-              נקה נתונים
+      <header className="app-header">
+        <div className="app-brand">📊 IBI Portfolio</div>
+        {rows.length > 0 && (
+          <div className="app-header-files">
+            {fileNames.map((name, index) => (
+              <span key={`${name}-${index}`} className="file-chip" title={name}>
+                📄 {name}
+              </span>
+            ))}
+            <label className="upload">
+              <input
+                type="file"
+                accept=".xlsx"
+                multiple
+                onChange={(event) => handleFiles(event.target.files)}
+                disabled={isLoading}
+              />
+              {isLoading ? "טוען…" : "📤 העלאה"}
+            </label>
+            <button className="ghost" type="button" onClick={() => window.print()}>
+              🖨 PDF
             </button>
-          )}
-        </div>
+            <button className="ghost" type="button" onClick={handleClear}>
+              🗑 נקה
+            </button>
+          </div>
+        )}
       </header>
 
-      <section className="table-card">
-        <div className="table-head">
-          <div>
-            <h2>תצוגת נתונים</h2>
-            <span>שורות: {rowCount}</span>
+      <main className="app-main">
+        {rows.length === 0 ? (
+          <div
+            className={isDragging ? "upload-zone dragging" : "upload-zone"}
+            onDragOver={(event) => {
+              event.preventDefault();
+              setIsDragging(true);
+            }}
+            onDragLeave={() => setIsDragging(false)}
+            onDrop={(event) => {
+              event.preventDefault();
+              setIsDragging(false);
+              handleFiles(event.dataTransfer.files);
+            }}
+          >
+            <div className="upload-zone-icon">📂</div>
+            <div className="upload-zone-title">גררו קבצי XLSX לכאן</div>
+            <p className="upload-zone-subtitle">או לחצו לבחירת קבצים</p>
+            <label className="upload">
+              <input
+                type="file"
+                accept=".xlsx"
+                multiple
+                onChange={(event) => handleFiles(event.target.files)}
+                disabled={isLoading}
+              />
+              {isLoading ? "טוען…" : "בחרו קבצים"}
+            </label>
+            <p className="upload-zone-hint">תומך בקבצים מ-IBI בלבד · {status}</p>
           </div>
-          <div className="tabs" role="tablist" aria-label="Data views">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === "summary"}
-              className={activeTab === "summary" ? "tab active" : "tab"}
-              onClick={() => setActiveTab("summary")}
-            >
-              ראשי
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === "account"}
-              className={activeTab === "account" ? "tab active" : "tab"}
-              onClick={() => setActiveTab("account")}
-            >
-              חשבון
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === "table"}
-              className={activeTab === "table" ? "tab active" : "tab"}
-              onClick={() => setActiveTab("table")}
-            >
-              טבלת פעולות
-            </button>
-          </div>
-        </div>
-        {validationError ? (
-          <p className="status" role="alert">
-            {validationError}
-          </p>
-        ) : null}
-        {activeTab === "summary" ? (
+        ) : (
+          <>
+            {validationError ? (
+              <p className="status" role="alert">
+                {validationError}
+              </p>
+            ) : null}
+            <nav className="app-tabs" role="tablist" aria-label="Data views">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === "dashboard"}
+                className={activeTab === "dashboard" ? "app-tab active" : "app-tab"}
+                onClick={() => handleTabChange("dashboard")}
+              >
+                דשבורד
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === "summary"}
+                className={activeTab === "summary" ? "app-tab active" : "app-tab"}
+                onClick={() => handleTabChange("summary")}
+              >
+                ראשי
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === "past"}
+                className={activeTab === "past" ? "app-tab active" : "app-tab"}
+                onClick={() => handleTabChange("past")}
+              >
+                עסקאות עבר
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === "account"}
+                className={activeTab === "account" ? "app-tab active" : "app-tab"}
+                onClick={() => handleTabChange("account")}
+              >
+                חשבון
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === "analytics"}
+                className={activeTab === "analytics" ? "app-tab active" : "app-tab"}
+                onClick={() => handleTabChange("analytics")}
+              >
+                ניתוח
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === "table"}
+                className={activeTab === "table" ? "app-tab active" : "app-tab"}
+                onClick={() => handleTabChange("table")}
+              >
+                פעולות
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === "alerts"}
+                className={activeTab === "alerts" ? "app-tab active" : "app-tab"}
+                onClick={() => handleTabChange("alerts")}
+              >
+                🔔 התראות
+              </button>
+            </nav>
+            <div className="tab-content">
+              {activeTab === "dashboard" ? (
+                validationError ? (
+                  <p className="empty">לא ניתן להציג נתונים עד לתיקון שגיאות האימות.</p>
+                ) : (
+                  <Dashboard portfolio={portfolio} />
+                )
+              ) : activeTab === "summary" ? (
           <div className="summary-panel">
             <div className="summary-header">
-              <h3>רשימת מניות</h3>
-              <label className="checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={showOnlyActive}
-                  onChange={(e) => setShowOnlyActive(e.target.checked)}
-                />
-                הראה רק מניות פעילות
-              </label>
+              <h3>מניות פעילות</h3>
             </div>
             {rows.length === 0 || validationError ? (
               <p className="empty">
@@ -919,9 +1191,51 @@ const App = () => {
             ) : (
               <SortableTable
                 columns={stocksTableColumns}
-                data={stocksTableData}
+                data={activeStocksData}
                 getRowKey={(row) => row.TICKER}
-                emptyMessage="לא נמצאו מניות להצגה."
+                emptyMessage="אין מניות פעילות להצגה."
+                toolbarSlot={
+                  activeStocksData.length > 0 ? (
+                    <button
+                      type="button"
+                      className="export-btn"
+                      onClick={() => handleExportStocks(activeStocksData, "ibi_active_stocks")}
+                    >
+                      ⬇ ייצוא לאקסל
+                    </button>
+                  ) : null
+                }
+              />
+            )}
+          </div>
+        ) : activeTab === "past" ? (
+          <div className="summary-panel">
+            <div className="summary-header">
+              <h3>עסקאות עבר</h3>
+            </div>
+            {rows.length === 0 || validationError ? (
+              <p className="empty">
+                {validationError
+                  ? "לא ניתן להציג נתונים עד לתיקון שגיאות האימות."
+                  : "עדיין אין נתונים להצגה."}
+              </p>
+            ) : (
+              <SortableTable
+                columns={stocksTableColumns}
+                data={inactiveStocksData}
+                getRowKey={(row) => row.TICKER}
+                emptyMessage="אין עסקאות עבר להצגה."
+                toolbarSlot={
+                  inactiveStocksData.length > 0 ? (
+                    <button
+                      type="button"
+                      className="export-btn"
+                      onClick={() => handleExportStocks(inactiveStocksData, "ibi_past_trades")}
+                    >
+                      ⬇ ייצוא לאקסל
+                    </button>
+                  ) : null
+                }
               />
             )}
           </div>
@@ -1091,6 +1405,23 @@ const App = () => {
               </>
             )}
           </div>
+        ) : activeTab === "analytics" ? (
+          rows.length === 0 || validationError ? (
+            <p className="empty">
+              {validationError
+                ? "לא ניתן להציג נתונים עד לתיקון שגיאות האימות."
+                : "עדיין אין נתונים להצגה."}
+            </p>
+          ) : (
+            <Analytics portfolio={portfolio} />
+          )
+        ) : activeTab === "alerts" ? (
+          <div className="summary-panel">
+            <div className="summary-header">
+              <h3>התראות מחיר</h3>
+            </div>
+            <PriceAlerts symbols={uniqueSymbols} livePrices={portfolio.livePrices} />
+          </div>
         ) : (
           <>
             {rows.length === 0 || validationError ? (
@@ -1113,11 +1444,39 @@ const App = () => {
                 data={rows}
                 getRowKey={(row, index) => `${row["תאריך"]}-${index}`}
                 emptyMessage="עדיין אין נתונים להצגה."
+                toolbarSlot={
+                  <>
+                    <span className="table-row-count">שורות: {rowCount}</span>
+                    <button type="button" className="export-btn" onClick={handleExportTransactions}>
+                      ⬇ ייצוא לאקסל
+                    </button>
+                  </>
+                }
               />
             )}
           </>
         )}
-      </section>
+            </div>
+          </>
+        )}
+      </main>
+      {rows.length > 0 && (
+        <footer className="keyboard-hint">
+          <span>קיצורי מקלדת:</span>
+          <kbd>1</kbd>
+          <kbd>2</kbd>
+          <kbd>3</kbd>
+          <kbd>4</kbd>
+          <kbd>5</kbd>
+          <kbd>6</kbd>
+          <kbd>7</kbd>
+          <span>מעבר בין טאבים</span>
+          <kbd>R</kbd>
+          <span>רענן מחירים</span>
+          <kbd>E</kbd>
+          <span>ייצוא</span>
+        </footer>
+      )}
         </>
       )}
     </div>

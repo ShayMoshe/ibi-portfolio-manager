@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import * as XLSX from "xlsx";
-import { fetchStockPrice, getCachedStockPrice, StockPrice, RateLimitError } from "./stockPriceService";
+import {
+  fetchStockPrice,
+  getCachedStockPrice,
+  StockPrice,
+  RateLimitError,
+  MissingApiKeyError,
+} from "./stockPriceService";
+import { parseDateToTimestamp, formatDateLabel, formatDuration } from "./utils/dates";
+import { formatNumber, formatUsd, formatSignedUsd, formatPercent } from "./utils/format";
+import KPICard from "./components/KPICard";
 import {
   AreaChart,
   Area,
@@ -17,90 +25,33 @@ interface StockDetailProps {
   ticker: string;
   rows: Record<string, string>[];
   onBack: () => void;
+  portfolioValue?: number;
 }
 
-const StockDetail = ({ ticker, rows, onBack }: StockDetailProps) => {
+// Public, no-login stock-analysis sites that resolve by ticker alone.
+// (Google Finance needs an exchange suffix, so we link a Google search instead —
+// it reliably surfaces the finance card without us guessing the exchange.)
+const ANALYSIS_LINKS: { label: string; build: (t: string) => string }[] = [
+  { label: "Yahoo Finance", build: (t) => `https://finance.yahoo.com/quote/${encodeURIComponent(t)}` },
+  { label: "Google", build: (t) => `https://www.google.com/search?q=${encodeURIComponent(`${t} stock`)}` },
+  { label: "StockAnalysis", build: (t) => `https://stockanalysis.com/stocks/${encodeURIComponent(t)}/` },
+  { label: "Finviz", build: (t) => `https://finviz.com/quote.ashx?t=${encodeURIComponent(t)}` },
+  { label: "TradingView", build: (t) => `https://www.tradingview.com/symbols/${encodeURIComponent(t)}/` },
+  { label: "CNBC", build: (t) => `https://www.cnbc.com/quotes/${encodeURIComponent(t)}` },
+  { label: "𝕏", build: (t) => `https://x.com/search?q=${encodeURIComponent(`@${t}`)}&src=typed_query` },
+];
+
+// Persist the profit-range slider choice across sessions.
+const PROFIT_RANGE_KEY = "ibi_profit_range_max";
+const loadProfitRange = (): number => {
+  const v = Number(localStorage.getItem(PROFIT_RANGE_KEY));
+  return Number.isFinite(v) && v >= 100 && v <= 5000 ? v : 500;
+};
+
+const StockDetail = ({ ticker, rows, onBack, portfolioValue }: StockDetailProps) => {
   const [price, setPrice] = useState<StockPrice | null>(null);
   const [isPriceLoading, setIsPriceLoading] = useState(true);
   const [priceError, setPriceError] = useState<string | null>(null);
-
-  const formatNumber = (value: number): string => {
-    const rounded = Math.round(value * 100) / 100;
-    if (rounded === Math.floor(rounded)) {
-      return rounded.toLocaleString("en-US");
-    }
-    return rounded.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  };
-
-  const parseDateToTimestamp = (value: string): number => {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return 0;
-    }
-
-    if (/^\d+(\.\d+)?$/.test(trimmed)) {
-      const numeric = Number(trimmed);
-      if (Number.isFinite(numeric)) {
-        const parsed = XLSX.SSF.parse_date_code(numeric);
-        if (parsed && parsed.y) {
-          return new Date(parsed.y, parsed.m - 1, parsed.d).getTime();
-        }
-      }
-    }
-
-    const dmyMatch = trimmed.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})$/);
-    if (dmyMatch) {
-      const day = parseInt(dmyMatch[1], 10);
-      const month = parseInt(dmyMatch[2], 10) - 1;
-      const year = parseInt(dmyMatch[3], 10);
-      return new Date(year, month, day).getTime();
-    }
-
-    const ymdMatch = trimmed.match(/^(\d{4})[\/.\-](\d{1,2})[\/.\-](\d{1,2})$/);
-    if (ymdMatch) {
-      const year = parseInt(ymdMatch[1], 10);
-      const month = parseInt(ymdMatch[2], 10) - 1;
-      const day = parseInt(ymdMatch[3], 10);
-      return new Date(year, month, day).getTime();
-    }
-
-    return 0;
-  };
-
-  const formatDateLabel = (value: string): string => {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return "";
-    }
-
-    if (/^\d+(\.\d+)?$/.test(trimmed)) {
-      const numeric = Number(trimmed);
-      if (Number.isFinite(numeric)) {
-        const parsed = XLSX.SSF.parse_date_code(numeric);
-        if (parsed && parsed.y) {
-          const day = String(parsed.d).padStart(2, "0");
-          const month = String(parsed.m).padStart(2, "0");
-          return `${day}/${month}/${parsed.y}`;
-        }
-      }
-    }
-
-    const dmyMatch = trimmed.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})$/);
-    if (dmyMatch) {
-      const day = dmyMatch[1].padStart(2, "0");
-      const month = dmyMatch[2].padStart(2, "0");
-      return `${day}/${month}/${dmyMatch[3]}`;
-    }
-
-    const ymdMatch = trimmed.match(/^(\d{4})[\/.\-](\d{1,2})[\/.\-](\d{1,2})$/);
-    if (ymdMatch) {
-      const day = ymdMatch[3].padStart(2, "0");
-      const month = ymdMatch[2].padStart(2, "0");
-      return `${day}/${month}/${ymdMatch[1]}`;
-    }
-
-    return trimmed;
-  };
 
   const transactionRows = useMemo(() => {
     const filtered = rows
@@ -238,6 +189,25 @@ const StockDetail = ({ ticker, rows, onBack }: StockDetailProps) => {
     return currentHoldingRows.length > 0 ? currentHoldingRows[currentHoldingRows.length - 1].cumulative : 0;
   }, [currentHoldingRows]);
 
+  // Live valuation of the current holding (uses the live price + cost basis).
+  const holdingStats = useMemo(() => {
+    const qty = currentHoldingQty;
+    if (qty <= 0) return null;
+    const avgCost = weightedAvgPrice ?? 0;
+    const costBasis = avgCost * qty;
+    const start = currentHoldingRows.length > 0 ? currentHoldingRows[0].timestamp : 0;
+    const holdingDays = start ? Math.round((Date.now() - start) / 86400000) : 0;
+    const currentValue = price ? price.price * qty : null;
+    const unrealizedPnL = currentValue !== null ? currentValue - costBasis : null;
+    const unrealizedPct =
+      unrealizedPnL !== null && costBasis > 0 ? (unrealizedPnL / costBasis) * 100 : null;
+    const weight =
+      currentValue !== null && portfolioValue && portfolioValue > 0
+        ? (currentValue / portfolioValue) * 100
+        : null;
+    return { qty, avgCost, costBasis, holdingDays, currentValue, unrealizedPnL, unrealizedPct, weight };
+  }, [currentHoldingQty, weightedAvgPrice, currentHoldingRows, price, portfolioValue]);
+
   const breakEvenPrice = useMemo(() => {
     if (currentHoldingQty <= 0) return null;
 
@@ -289,7 +259,15 @@ const StockDetail = ({ ticker, rows, onBack }: StockDetailProps) => {
   };
 
   const [customPriceInput, setCustomPriceInput] = useState<string>("");
-  const [profitRangeMax, setProfitRangeMax] = useState(500);
+  const [profitRangeMax, setProfitRangeMax] = useState<number>(loadProfitRange);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PROFIT_RANGE_KEY, String(profitRangeMax));
+    } catch {
+      /* ignore storage errors */
+    }
+  }, [profitRangeMax]);
 
   const chartData = useMemo(() => {
     if (breakEvenPrice === null || currentHoldingQty <= 0) return [];
@@ -356,8 +334,10 @@ const StockDetail = ({ ticker, rows, onBack }: StockDetailProps) => {
         if (priceData) setPrice(priceData);
       } catch (err) {
         console.error("Failed to load stock price:", err);
-        if (err instanceof RateLimitError) {
-          setPriceError("הגעת למגבלת השימוש היומית של ה-API עבור מחיר המניה. נסה שוב מאוחר יותר.");
+        if (err instanceof MissingApiKeyError) {
+          setPriceError("חסר מפתח API של Finnhub. הגדר VITE_FINNHUB_API_KEY בקובץ .env.local.");
+        } else if (err instanceof RateLimitError) {
+          setPriceError("הגעת למגבלת השימוש של ה-API עבור מחיר המניה (60 בקשות לדקה). נסה שוב מאוחר יותר.");
         } else {
           setPriceError("שגיאה בטעינת מחיר המניה. נסה שוב מאוחר יותר.");
         }
@@ -386,22 +366,17 @@ const StockDetail = ({ ticker, rows, onBack }: StockDetailProps) => {
           <div className="stock-header-top">
             <h1 className="stock-ticker">{ticker}</h1>
             <div className="stock-links">
-              <a
-                className="stock-link"
-                href={`https://www.google.com/finance/quote/${encodeURIComponent(ticker)}`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                Google Finance
-              </a>
-              <a
-                className="stock-link"
-                href={`https://finance.yahoo.com/quote/${encodeURIComponent(ticker)}`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                Yahoo Finance
-              </a>
+              {ANALYSIS_LINKS.map((link) => (
+                <a
+                  key={link.label}
+                  className="stock-link"
+                  href={link.build(ticker)}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {link.label}
+                </a>
+              ))}
             </div>
           </div>
           <div className="stock-info">
@@ -430,13 +405,52 @@ const StockDetail = ({ ticker, rows, onBack }: StockDetailProps) => {
           </div>
         </div>
 
-        <div className="stock-stats-card">
-          <div className="stat-item">
-            <span className="stat-label">מחיר ממוצע משוקלל</span>
-            <span className="stat-value">
-              {weightedAvgPrice !== null ? `$${formatNumber(weightedAvgPrice)}` : "-"}
-            </span>
+        {holdingStats && (
+          <div className="stock-kpi-grid">
+            <KPICard label="כמות" value={formatNumber(holdingStats.qty)} icon="📦" />
+            <KPICard label="מחיר ממוצע" value={formatUsd(holdingStats.avgCost)} icon="🧾" />
+            <KPICard label="עלות כוללת" value={formatUsd(holdingStats.costBasis)} icon="💵" />
+            <KPICard
+              label="שווי נוכחי"
+              value={holdingStats.currentValue !== null ? formatUsd(holdingStats.currentValue) : "—"}
+              icon="💼"
+            />
+            <KPICard
+              label="רווח/הפסד לא ממומש"
+              value={
+                holdingStats.unrealizedPnL !== null ? formatSignedUsd(holdingStats.unrealizedPnL) : "—"
+              }
+              change={
+                holdingStats.unrealizedPct !== null
+                  ? formatPercent(holdingStats.unrealizedPct)
+                  : undefined
+              }
+              changeKind={
+                holdingStats.unrealizedPnL === null
+                  ? "neutral"
+                  : holdingStats.unrealizedPnL >= 0
+                  ? "positive"
+                  : "negative"
+              }
+              icon="📈"
+            />
+            <KPICard
+              label='סה"כ דיבידנד'
+              value={dividendTotals.dividend > 0 ? formatUsd(dividendTotals.dividend) : "—"}
+              changeKind={dividendTotals.dividend > 0 ? "positive" : "neutral"}
+              sub={dividendTotals.dividend > 0 ? `נטו ${formatUsd(dividendTotals.net)}` : undefined}
+              icon="💰"
+            />
+            <KPICard label="ימי אחזקה" value={String(holdingStats.holdingDays)} icon="📅" />
+            <KPICard
+              label="% מהתיק"
+              value={holdingStats.weight !== null ? `${holdingStats.weight.toFixed(1)}%` : "—"}
+              icon="⚖️"
+            />
           </div>
+        )}
+
+        <div className="stock-stats-card">
           <div className="profit-chart-card">
             <div className="profit-chart-header">
               <h3>רווח / הפסד לפי מחיר מכירה</h3>
@@ -471,6 +485,8 @@ const StockDetail = ({ ticker, rows, onBack }: StockDetailProps) => {
               )}
             </div>
 
+            <div className="profit-chart-body">
+              <div className="profit-chart-plot">
             {chartData.length > 0 ? (
               <ResponsiveContainer width="100%" height={260}>
                 <AreaChart data={chartData} margin={{ top: 14, right: 16, left: 0, bottom: 0 }}>
@@ -553,6 +569,35 @@ const StockDetail = ({ ticker, rows, onBack }: StockDetailProps) => {
             ) : (
               <div className="profit-chart-empty">הזן נתוני קנייה לתצוגת הגרף.</div>
             )}
+              </div>
+              <div className="profit-targets-side">
+                <div className="profit-targets-title">מחיר מכירה ליעד רווח נטו</div>
+                <table className="profit-targets-table">
+                  <thead>
+                    <tr>
+                      <th>רווח נטו</th>
+                      <th>מחיר מכירה</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {breakEvenPrice !== null && (
+                      <tr>
+                        <td>ללא הפסד</td>
+                        <td className="mono">${formatNumber(breakEvenPrice)}</td>
+                      </tr>
+                    )}
+                    {profitTargetRows.map((row) => (
+                      <tr key={row.target}>
+                        <td className="val-positive">+${row.target}</td>
+                        <td className="mono">
+                          {row.price !== null ? `$${formatNumber(row.price)}` : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
 
             <div className="profit-chart-legend">
               {chartRefDots.map((dot) => (

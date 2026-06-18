@@ -17,6 +17,7 @@ interface SortableTableProps<T> {
   data: T[];
   getRowKey: (row: T, index: number) => string;
   emptyMessage?: string;
+  toolbarSlot?: React.ReactNode;
 }
 
 const SortableTable = <T extends Record<string, unknown>>({
@@ -24,6 +25,7 @@ const SortableTable = <T extends Record<string, unknown>>({
   data,
   getRowKey,
   emptyMessage = "אין נתונים להצגה.",
+  toolbarSlot,
 }: SortableTableProps<T>) => {
   // Initialize with date column sorted desc if exists
   const dateColumn = columns.find(col => col.filterType === 'date');
@@ -107,25 +109,19 @@ const SortableTable = <T extends Record<string, unknown>>({
   }, [data, filters, sortColumn, sortDirection, columns]);
 
   return (
-    <div className="table-wrap">
-      <div style={{ marginBottom: '10px', textAlign: 'right' }}>
+    <>
+      <div className="table-toolbar">
+        <div className="table-toolbar-group">{toolbarSlot}</div>
         <button
           type="button"
+          className={showFilters ? "filter-toggle active" : "filter-toggle"}
           onClick={() => setShowFilters(!showFilters)}
-          style={{
-            padding: '6px 12px',
-            backgroundColor: showFilters ? '#4CAF50' : '#f0f0f0',
-            color: showFilters ? 'white' : '#333',
-            border: '1px solid #ddd',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            fontSize: '14px',
-          }}
         >
-          {showFilters ? '🔍 הסתר סינון' : '🔍 הצג סינון'}
+          {showFilters ? "🔍 הסתר סינון" : "🔍 הצג סינון"}
         </button>
       </div>
-      <table>
+      <div className="table-wrap">
+        <table>
         <thead>
           <tr>
             {columns.map((column) => (
@@ -184,8 +180,9 @@ const SortableTable = <T extends Record<string, unknown>>({
             ))
           )}
         </tbody>
-      </table>
-    </div>
+        </table>
+      </div>
+    </>
   );
 };
 
