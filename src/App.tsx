@@ -267,10 +267,50 @@ const parseWorkbook = (workbook: XLSX.WorkBook) => {
   return rows;
 };
 
+// Persist uploaded data for the lifetime of the browser tab so a page refresh
+// doesn't wipe it. Dev mode auto-loads from /dev-data instead, so we skip the
+// session cache there to keep that flow untouched.
+const SESSION_KEY = "ibi_session_data";
+
+const readSession = (): { rows: Row[]; fileNames: string[] } | null => {
+  if (import.meta.env.DEV) return null;
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { rows?: Row[]; fileNames?: string[] };
+    if (!Array.isArray(parsed.rows) || parsed.rows.length === 0) return null;
+    return { rows: parsed.rows, fileNames: Array.isArray(parsed.fileNames) ? parsed.fileNames : [] };
+  } catch {
+    return null;
+  }
+};
+
+// Read the session cache once per tab load and reuse it across the state
+// initializers below, instead of parsing storage four separate times.
+let bootSessionLoaded = false;
+let bootSession: { rows: Row[]; fileNames: string[] } | null = null;
+const getBootSession = (): { rows: Row[]; fileNames: string[] } | null => {
+  if (!bootSessionLoaded) {
+    bootSession = readSession();
+    bootSessionLoaded = true;
+  }
+  return bootSession;
+};
+
 const App = () => {
-  const [rows, setRows] = useState<Row[]>([]);
-  const [status, setStatus] = useState<string>("Upload XLSX files to begin.");
-  const [validationError, setValidationError] = useState<string | null>(null);
+  const [rows, setRows] = useState<Row[]>(() => getBootSession()?.rows ?? []);
+  const [status, setStatus] = useState<string>(() => {
+    const session = getBootSession();
+    return session
+      ? `Loaded ${session.rows.length} rows from ${session.fileNames.length} file(s).`
+      : "Upload XLSX files to begin.";
+  });
+  const [validationError, setValidationError] = useState<string | null>(() => {
+    const session = getBootSession();
+    if (!session) return null;
+    const validation = validateYears(session.rows);
+    return validation.ok ? null : validation.message;
+  });
   const [isLoading, setIsLoading] = useState(false);
   const TAB_NAMES = [
     "dashboard",
@@ -300,7 +340,7 @@ const App = () => {
   const [selectedTicker, setSelectedTicker] = useState<string | null>(
     () => new URLSearchParams(window.location.search).get("ticker")
   );
-  const [fileNames, setFileNames] = useState<string[]>([]);
+  const [fileNames, setFileNames] = useState<string[]>(() => getBootSession()?.fileNames ?? []);
   const [isDragging, setIsDragging] = useState(false);
 
   // Keep the open stock / past-trade page in the URL so a refresh restores it.
@@ -313,6 +353,21 @@ const App = () => {
     }
     window.history.replaceState(null, "", `?${params.toString()}`);
   }, [selectedTicker]);
+
+  // Cache uploaded data in sessionStorage so it survives a page refresh.
+  // Skipped in dev, where /dev-data is auto-loaded on mount instead.
+  useEffect(() => {
+    if (import.meta.env.DEV) return;
+    try {
+      if (rows.length > 0) {
+        sessionStorage.setItem(SESSION_KEY, JSON.stringify({ rows, fileNames }));
+      } else {
+        sessionStorage.removeItem(SESSION_KEY);
+      }
+    } catch (error) {
+      console.warn("Failed to persist session data:", error);
+    }
+  }, [rows, fileNames]);
 
   const rowCount = useMemo(() => rows.length, [rows]);
 
