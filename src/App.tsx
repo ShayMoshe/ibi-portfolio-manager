@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import {
   Bar,
@@ -340,6 +340,15 @@ const App = () => {
   const [selectedTicker, setSelectedTicker] = useState<string | null>(
     () => new URLSearchParams(window.location.search).get("ticker")
   );
+  // Which face of the selected ticker to show. A ticker that was sold to zero
+  // and re-bought has both an active holding and a past (closed) trade, so the
+  // ticker alone can't decide — this disambiguates. null falls back to the
+  // net-quantity heuristic in `showClosedDetail` (preserves old URLs).
+  type DetailView = "active" | "closed";
+  const [detailView, setDetailView] = useState<DetailView | null>(() => {
+    const v = new URLSearchParams(window.location.search).get("view");
+    return v === "active" || v === "closed" ? v : null;
+  });
   const [fileNames, setFileNames] = useState<string[]>(() => getBootSession()?.fileNames ?? []);
   const [isDragging, setIsDragging] = useState(false);
 
@@ -348,11 +357,24 @@ const App = () => {
     const params = new URLSearchParams(window.location.search);
     if (selectedTicker) {
       params.set("ticker", selectedTicker);
+      if (detailView) params.set("view", detailView);
+      else params.delete("view");
     } else {
       params.delete("ticker");
+      params.delete("view");
     }
     window.history.replaceState(null, "", `?${params.toString()}`);
-  }, [selectedTicker]);
+  }, [selectedTicker, detailView]);
+
+  // Open a ticker's detail in a specific view, and close it again.
+  const openTicker = useCallback((ticker: string, view: DetailView) => {
+    setSelectedTicker(ticker);
+    setDetailView(view);
+  }, []);
+  const closeDetail = useCallback(() => {
+    setSelectedTicker(null);
+    setDetailView(null);
+  }, []);
 
   // Cache uploaded data in sessionStorage so it survives a page refresh.
   // Skipped in dev, where /dev-data is auto-loaded on mount instead.
@@ -393,6 +415,15 @@ const App = () => {
     });
     return closed;
   }, [rows]);
+
+  // Tickers that have at least one fully-closed (buy→sell-to-zero) round. This
+  // is a superset of `closedTickersSet`: it also catches tickers that were sold
+  // to zero and then re-bought, which still hold shares now but also have a past
+  // trade worth surfacing.
+  const closedRoundTickersSet = useMemo(
+    () => new Set(portfolio.realizedRounds.map((r) => r.symbol)),
+    [portfolio.realizedRounds]
+  );
   const uniqueSymbols = useMemo(() => {
     const symbols = new Set<string>();
     rows.forEach((row) => {
@@ -476,14 +507,28 @@ const App = () => {
     });
   }, [uniqueSymbols, rows, portfolio.positions, portfolio.livePrices]);
 
-  // Split holdings: active (still holds shares) vs. past trades (fully sold).
+  // Split holdings: active (still holds shares) vs. past trades. A re-bought
+  // ticker appears in BOTH — active for its current holding, and past for the
+  // closed round(s) it completed earlier. In the past list its quantity is
+  // shown as 0, since the closed portion netted back to zero shares.
   const activeStocksData = useMemo(
     () => stocksTableData.filter((stock) => Math.abs(stock._rawQuantity) >= 0.01),
     [stocksTableData]
   );
   const inactiveStocksData = useMemo(
-    () => stocksTableData.filter((stock) => Math.abs(stock._rawQuantity) < 0.01),
-    [stocksTableData]
+    () =>
+      stocksTableData
+        .filter((stock) => closedRoundTickersSet.has(stock.TICKER))
+        .map((stock) =>
+          Math.abs(stock._rawQuantity) >= 0.01
+            ? { ...stock, _rawQuantity: 0, "כמות במניה": "0.00" }
+            : stock
+        ),
+    [stocksTableData, closedRoundTickersSet]
+  );
+  const heldTickersSet = useMemo(
+    () => new Set(activeStocksData.map((stock) => stock.TICKER)),
+    [activeStocksData]
   );
 
   const stocksSummary = useMemo(() => {
@@ -732,7 +777,7 @@ const App = () => {
           return (
             <button
               className={isClosed ? "ticker-link ticker-link-closed" : "ticker-link"}
-              onClick={() => setSelectedTicker(sym)}
+              onClick={() => openTicker(sym, activeTab === "past" ? "closed" : "active")}
               title={isClosed ? "מניה שנמכרה - לחץ לסיכום עסקה" : undefined}
             >
               {sym}
@@ -845,7 +890,7 @@ const App = () => {
         },
       },
     ],
-    [closedTickersSet]
+    [closedTickersSet, activeTab, openTicker]
   );
 
   const transactionsTableColumns = useMemo<TableColumn<Row>[]>(
@@ -1044,12 +1089,21 @@ const App = () => {
     return rounded.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
 
-  // Quick-switch sidebar list for the detail view — the group the user drilled
-  // in from (active holdings from ראשי, closed positions from עסקאות עבר).
-  const detailList = activeTab === "past" ? inactiveStocksData : activeStocksData;
+  // Which face of the open ticker to show. An explicit pick (e.g. clicking the
+  // past-trade link on an active stock) wins; otherwise fall back to the
+  // net-quantity heuristic so plain tickers and old URLs behave as before.
+  const showClosedDetail = selectedTicker
+    ? detailView
+      ? detailView === "closed"
+      : closedTickersSet.has(selectedTicker)
+    : false;
+
+  // Quick-switch sidebar list for the detail view — the group matching the open
+  // face (active holdings, or closed positions from עסקאות עבר).
+  const detailList = showClosedDetail ? inactiveStocksData : activeStocksData;
   const perfBySymbol = new Map(portfolio.stockPerformance.map((s) => [s.symbol, s]));
   const sidebarItems: SidebarItem[] = detailList.map((stock) => {
-    if (activeTab === "past") {
+    if (showClosedDetail) {
       const pnl = perfBySymbol.get(stock.TICKER)?.finalPnL ?? 0;
       return {
         ticker: stock.TICKER,
@@ -1070,24 +1124,28 @@ const App = () => {
       {selectedTicker ? (
         <div className="detail-layout">
           <StockSidebar
-            title={activeTab === "past" ? "עסקאות עבר" : "מניות פעילות"}
+            title={showClosedDetail ? "עסקאות עבר" : "מניות פעילות"}
             items={sidebarItems}
             selected={selectedTicker}
-            onSelect={setSelectedTicker}
+            onSelect={(sym) => openTicker(sym, showClosedDetail ? "closed" : "active")}
           />
           <div className="detail-main">
-            {closedTickersSet.has(selectedTicker) ? (
+            {showClosedDetail ? (
               <ClosedPositionDetail
                 ticker={selectedTicker}
                 rows={rows}
-                onBack={() => setSelectedTicker(null)}
+                onBack={closeDetail}
+                hasActivePosition={heldTickersSet.has(selectedTicker)}
+                onViewActivePosition={() => openTicker(selectedTicker, "active")}
               />
             ) : (
               <StockDetail
                 ticker={selectedTicker}
                 rows={rows}
-                onBack={() => setSelectedTicker(null)}
+                onBack={closeDetail}
                 portfolioValue={portfolio.summary.totalMarketValue}
+                hasPastTrade={closedRoundTickersSet.has(selectedTicker)}
+                onViewPastTrade={() => openTicker(selectedTicker, "closed")}
               />
             )}
           </div>

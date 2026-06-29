@@ -26,6 +26,10 @@ interface StockDetailProps {
   rows: Record<string, string>[];
   onBack: () => void;
   portfolioValue?: number;
+  // This ticker also has a closed (past) trade — sold to zero earlier, then
+  // re-bought. Surface a link to that closed-position summary.
+  hasPastTrade?: boolean;
+  onViewPastTrade?: () => void;
 }
 
 // Public, no-login stock-analysis sites that resolve by ticker alone.
@@ -48,7 +52,14 @@ const loadProfitRange = (): number => {
   return Number.isFinite(v) && v >= 100 && v <= 5000 ? v : 500;
 };
 
-const StockDetail = ({ ticker, rows, onBack, portfolioValue }: StockDetailProps) => {
+const StockDetail = ({
+  ticker,
+  rows,
+  onBack,
+  portfolioValue,
+  hasPastTrade,
+  onViewPastTrade,
+}: StockDetailProps) => {
   const [price, setPrice] = useState<StockPrice | null>(null);
   const [isPriceLoading, setIsPriceLoading] = useState(true);
   const [priceError, setPriceError] = useState<string | null>(null);
@@ -197,6 +208,22 @@ const StockDetail = ({ ticker, rows, onBack, portfolioValue }: StockDetailProps)
     const costBasis = avgCost * qty;
     const start = currentHoldingRows.length > 0 ? currentHoldingRows[0].timestamp : 0;
     const holdingDays = start ? Math.round((Date.now() - start) / 86400000) : 0;
+
+    // ימי אחזקה ממוצעים: ממוצע משוקלל של הימים מאז כל רכישה, לפי הכמות שנרכשה בכל פעם.
+    // רלוונטי רק כשיש יותר מרכישה אחת — אחרת הוא זהה ל"ימי אחזקה".
+    let weightedDaysSum = 0;
+    let buyQty = 0;
+    let buyCount = 0;
+    currentHoldingRows.forEach((row) => {
+      if (row.actionLabel === "קנייה" || row.actionLabel === "הטבה") {
+        const days = (Date.now() - row.timestamp) / 86400000;
+        weightedDaysSum += days * row.quantity;
+        buyQty += row.quantity;
+        buyCount += 1;
+      }
+    });
+    const avgHoldingDays = buyCount > 1 && buyQty > 0 ? Math.round(weightedDaysSum / buyQty) : null;
+
     const currentValue = price ? price.price * qty : null;
     const unrealizedPnL = currentValue !== null ? currentValue - costBasis : null;
     const unrealizedPct =
@@ -205,7 +232,7 @@ const StockDetail = ({ ticker, rows, onBack, portfolioValue }: StockDetailProps)
       currentValue !== null && portfolioValue && portfolioValue > 0
         ? (currentValue / portfolioValue) * 100
         : null;
-    return { qty, avgCost, costBasis, holdingDays, currentValue, unrealizedPnL, unrealizedPct, weight };
+    return { qty, avgCost, costBasis, holdingDays, avgHoldingDays, currentValue, unrealizedPnL, unrealizedPct, weight };
   }, [currentHoldingQty, weightedAvgPrice, currentHoldingRows, price, portfolioValue]);
 
   const breakEvenPrice = useMemo(() => {
@@ -355,6 +382,14 @@ const StockDetail = ({ ticker, rows, onBack, portfolioValue }: StockDetailProps)
         ← חזרה לרשימת מניות
       </button>
 
+      {hasPastTrade && onViewPastTrade && (
+        <button className="detail-cross-link" onClick={onViewPastTrade}>
+          <span className="detail-cross-link-icon">🕒</span>
+          <span>למניה זו יש עסקת עבר (נמכרה ונקנתה מחדש) — צפה בסיכום העסקה הסגורה</span>
+          <span className="detail-cross-link-arrow">←</span>
+        </button>
+      )}
+
       {priceError && (
         <div className="error-message">
           <p>⚠️ {priceError}</p>
@@ -441,7 +476,16 @@ const StockDetail = ({ ticker, rows, onBack, portfolioValue }: StockDetailProps)
               sub={dividendTotals.dividend > 0 ? `נטו ${formatUsd(dividendTotals.net)}` : undefined}
               icon="💰"
             />
-            <KPICard label="ימי אחזקה" value={String(holdingStats.holdingDays)} icon="📅" />
+            <KPICard
+              label="ימי אחזקה"
+              value={String(holdingStats.holdingDays)}
+              sub={
+                holdingStats.avgHoldingDays !== null
+                  ? `ממוצע משוקלל ${holdingStats.avgHoldingDays}`
+                  : undefined
+              }
+              icon="📅"
+            />
             <KPICard
               label="% מהתיק"
               value={holdingStats.weight !== null ? `${holdingStats.weight.toFixed(1)}%` : "—"}

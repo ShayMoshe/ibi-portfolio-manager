@@ -5,9 +5,19 @@ interface ClosedPositionDetailProps {
   ticker: string;
   rows: Record<string, string>[];
   onBack: () => void;
+  // This ticker was re-bought after this round closed and is held again now —
+  // link across to the live active-holding view.
+  hasActivePosition?: boolean;
+  onViewActivePosition?: () => void;
 }
 
-const ClosedPositionDetail = ({ ticker, rows, onBack }: ClosedPositionDetailProps) => {
+const ClosedPositionDetail = ({
+  ticker,
+  rows,
+  onBack,
+  hasActivePosition,
+  onViewActivePosition,
+}: ClosedPositionDetailProps) => {
   const formatNumber = (value: number): string => {
     const rounded = Math.round(value * 100) / 100;
     if (rounded === Math.floor(rounded)) {
@@ -145,6 +155,10 @@ const ClosedPositionDetail = ({ ticker, rows, onBack }: ClosedPositionDetailProp
       firstTimestamp: number;
       lastTimestamp: number;
       durationDays: number;
+      weightedDaysSum: number;
+      buyQty: number;
+      buyCount: number;
+      avgHoldingDays: number | null;
       costBasis: number;
       proceeds: number;
       buyFees: number;
@@ -164,11 +178,17 @@ const ClosedPositionDetail = ({ ticker, rows, onBack }: ClosedPositionDetailProp
           const first = txns[0];
           const last = txns[txns.length - 1];
           let costBasis = 0, proceeds = 0, buyFees = 0, sellFees = 0;
+          // ימי אחזקה ממוצעים: לכל רכישה, הימים מאז הרכישה ועד סגירת העסקה (המכירה האחרונה),
+          // משוקלל לפי הכמות שנרכשה בכל פעם.
+          let weightedDaysSum = 0, buyQty = 0, buyCount = 0;
 
           txns.forEach((txn) => {
             if (txn.isBuy) {
               costBasis += txn.price * txn.quantity;
               buyFees += txn.fee;
+              weightedDaysSum += ((last.timestamp - txn.timestamp) / 86400000) * txn.quantity;
+              buyQty += txn.quantity;
+              buyCount += 1;
             } else {
               proceeds += txn.price * txn.quantity;
               sellFees += txn.fee;
@@ -180,6 +200,8 @@ const ClosedPositionDetail = ({ ticker, rows, onBack }: ClosedPositionDetailProp
           const capitalGainsTax = netFromTrading > 0 ? netFromTrading * 0.25 : 0;
           const netAfterTax = netFromTrading > 0 ? netFromTrading * 0.75 : netFromTrading;
           const durationDays = Math.round((last.timestamp - first.timestamp) / 86400000);
+          // רלוונטי רק כשיש יותר מרכישה אחת — אחרת זהה למשך ההחזקה.
+          const avgHoldingDays = buyCount > 1 && buyQty > 0 ? Math.round(weightedDaysSum / buyQty) : null;
 
           result.push({
             transactions: txns,
@@ -188,6 +210,10 @@ const ClosedPositionDetail = ({ ticker, rows, onBack }: ClosedPositionDetailProp
             firstTimestamp: first.timestamp,
             lastTimestamp: last.timestamp,
             durationDays,
+            weightedDaysSum,
+            buyQty,
+            buyCount,
+            avgHoldingDays,
             costBasis,
             proceeds,
             buyFees,
@@ -241,11 +267,17 @@ const ClosedPositionDetail = ({ ticker, rows, onBack }: ClosedPositionDetailProp
     const lastDate = roundsWithDividends[roundsWithDividends.length - 1]?.lastDate ?? "-";
     const totalDays = firstTimestamp && lastTimestamp ? Math.round((lastTimestamp - firstTimestamp) / 86400000) : 0;
 
+    // ממוצע משוקלל של ימי האחזקה על פני כל הרכישות בכל העסקאות.
+    const weightedDaysSum = roundsWithDividends.reduce((s, r) => s + r.weightedDaysSum, 0);
+    const buyQty = roundsWithDividends.reduce((s, r) => s + r.buyQty, 0);
+    const buyCount = roundsWithDividends.reduce((s, r) => s + r.buyCount, 0);
+    const avgHoldingDays = buyCount > 1 && buyQty > 0 ? Math.round(weightedDaysSum / buyQty) : null;
+
     return {
       costBasis, proceeds, totalFees, netFromTrading, capitalGainsTax,
       netAfterTax, dividendsGross, dividendsTax, dividendsNet,
       finalPnL, totalInvested, returnPercent,
-      firstDate, lastDate, totalDays,
+      firstDate, lastDate, totalDays, avgHoldingDays,
     };
   }, [roundsWithDividends, dividendRows]);
 
@@ -256,6 +288,14 @@ const ClosedPositionDetail = ({ ticker, rows, onBack }: ClosedPositionDetailProp
       <button className="back-button" onClick={onBack}>
         ← חזרה לרשימת מניות
       </button>
+
+      {hasActivePosition && onViewActivePosition && (
+        <button className="detail-cross-link" onClick={onViewActivePosition}>
+          <span className="detail-cross-link-icon">📈</span>
+          <span>מניה זו נקנתה מחדש ומוחזקת כעת — צפה באחזקה הפעילה</span>
+          <span className="detail-cross-link-arrow">←</span>
+        </button>
+      )}
 
       <div className="stock-header">
         <div className="stock-header-top">
@@ -313,6 +353,9 @@ const ClosedPositionDetail = ({ ticker, rows, onBack }: ClosedPositionDetailProp
         <div className="closed-summary-card">
           <div className="closed-summary-label">משך ההחזקה</div>
           <div className="closed-summary-value">{formatDuration(totals.totalDays)}</div>
+          {totals.avgHoldingDays !== null && (
+            <div className="closed-summary-sub">ממוצע משוקלל {formatDuration(totals.avgHoldingDays)}</div>
+          )}
         </div>
       </div>
 
@@ -381,6 +424,9 @@ const ClosedPositionDetail = ({ ticker, rows, onBack }: ClosedPositionDetailProp
                   <span className="closed-round-number">עסקה {i + 1}</span>
                   <span className="closed-round-dates">{round.firstDate} – {round.lastDate}</span>
                   <span className="closed-round-duration">{formatDuration(round.durationDays)}</span>
+                  {round.avgHoldingDays !== null && (
+                    <span className="closed-round-duration-avg">ממוצע {formatDuration(round.avgHoldingDays)}</span>
+                  )}
                   <span className={`closed-round-pnl ${round.finalPnL >= 0 ? "val-positive" : "val-negative"}`}>
                     {round.finalPnL >= 0 ? "+" : ""}${formatNumber(round.finalPnL)}
                     {" "}({round.returnPercent >= 0 ? "+" : ""}{round.returnPercent.toFixed(2)}%)

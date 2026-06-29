@@ -1114,6 +1114,39 @@ tbody tr:hover {
   transform: translateX(2px);
 }
 
+/* Cross-link banner between the active and closed faces of a re-bought ticker. */
+.detail-cross-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: start;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  color: #9a3412;
+  padding: 12px 16px;
+  border-radius: 10px;
+  margin-bottom: 20px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.95rem;
+  transition: all 0.2s ease;
+}
+
+.detail-cross-link:hover {
+  background: #ffedd5;
+  border-color: #fdba74;
+}
+
+.detail-cross-link-icon {
+  font-size: 1.1rem;
+}
+
+.detail-cross-link-arrow {
+  margin-inline-start: auto;
+  font-size: 1.1rem;
+}
+
 .stock-header {
   background: linear-gradient(120deg, #fffaf2, #f0f5ff 60%, #e7f0f6);
   border: 1px solid #e2e8f0;
@@ -1946,6 +1979,12 @@ tbody tr:hover {
   text-align: right;
 }
 
+.closed-summary-sub {
+  margin-top: 4px;
+  font-size: 0.78rem;
+  color: #64748b;
+}
+
 /* Shared positive/negative value classes */
 .val-positive {
   color: #15803d;
@@ -2048,6 +2087,11 @@ tbody tr:hover {
   padding: 2px 8px;
   font-size: 0.78rem;
   color: #64748b;
+}
+
+.closed-round-duration-avg {
+  font-size: 0.74rem;
+  color: #94a3b8;
 }
 
 .closed-round-pnl {
