@@ -1,8 +1,17 @@
-import * as XLSX from "xlsx";
-
 // Shared date helpers. Logic is identical to the copies previously inlined in
 // App / StockDetail / ClosedPositionDetail, centralized here as the single
 // source of truth. Supports Excel serial numbers, DD/MM/YYYY and YYYY-MM-DD.
+
+const parseExcelSerialDate = (value: number): { y: number; m: number; d: number } | null => {
+  if (!Number.isFinite(value) || value <= 0) return null;
+  const excelEpoch = Date.UTC(1899, 11, 30);
+  const date = new Date(excelEpoch + Math.floor(value) * 86_400_000);
+  return {
+    y: date.getUTCFullYear(),
+    m: date.getUTCMonth() + 1,
+    d: date.getUTCDate(),
+  };
+};
 
 export const parseDateToTimestamp = (value: string): number => {
   const trimmed = value.trim();
@@ -11,7 +20,7 @@ export const parseDateToTimestamp = (value: string): number => {
   if (/^\d+(\.\d+)?$/.test(trimmed)) {
     const numeric = Number(trimmed);
     if (Number.isFinite(numeric)) {
-      const parsed = XLSX.SSF.parse_date_code(numeric);
+      const parsed = parseExcelSerialDate(numeric);
       if (parsed && parsed.y) {
         return new Date(parsed.y, parsed.m - 1, parsed.d).getTime();
       }
@@ -46,7 +55,7 @@ export const formatDateLabel = (value: string): string => {
   if (/^\d+(\.\d+)?$/.test(trimmed)) {
     const numeric = Number(trimmed);
     if (Number.isFinite(numeric)) {
-      const parsed = XLSX.SSF.parse_date_code(numeric);
+      const parsed = parseExcelSerialDate(numeric);
       if (parsed && parsed.y) {
         const day = String(parsed.d).padStart(2, "0");
         const month = String(parsed.m).padStart(2, "0");
@@ -75,7 +84,7 @@ export const parseDateYear = (value: string): number | null => {
   if (/^\d+(\.\d+)?$/.test(trimmed)) {
     const numeric = Number(trimmed);
     if (Number.isFinite(numeric)) {
-      const parsed = XLSX.SSF.parse_date_code(numeric);
+      const parsed = parseExcelSerialDate(numeric);
       if (parsed && parsed.y) return parsed.y;
     }
   }

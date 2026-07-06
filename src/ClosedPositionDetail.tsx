@@ -1,5 +1,6 @@
 import { useMemo } from "react";
-import * as XLSX from "xlsx";
+import { formatDateLabel, formatDuration, parseDateToTimestamp } from "./utils/dates";
+import { formatNumber } from "./utils/format";
 
 interface ClosedPositionDetailProps {
   ticker: string;
@@ -18,66 +19,6 @@ const ClosedPositionDetail = ({
   hasActivePosition,
   onViewActivePosition,
 }: ClosedPositionDetailProps) => {
-  const formatNumber = (value: number): string => {
-    const rounded = Math.round(value * 100) / 100;
-    if (rounded === Math.floor(rounded)) {
-      return rounded.toLocaleString("en-US");
-    }
-    return rounded.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  };
-
-  const parseDateToTimestamp = (value: string): number => {
-    const trimmed = value.trim();
-    if (!trimmed) return 0;
-    if (/^\d+(\.\d+)?$/.test(trimmed)) {
-      const numeric = Number(trimmed);
-      if (Number.isFinite(numeric)) {
-        const parsed = XLSX.SSF.parse_date_code(numeric);
-        if (parsed && parsed.y) {
-          return new Date(parsed.y, parsed.m - 1, parsed.d).getTime();
-        }
-      }
-    }
-    const dmyMatch = trimmed.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})$/);
-    if (dmyMatch) {
-      return new Date(parseInt(dmyMatch[3], 10), parseInt(dmyMatch[2], 10) - 1, parseInt(dmyMatch[1], 10)).getTime();
-    }
-    const ymdMatch = trimmed.match(/^(\d{4})[\/.\-](\d{1,2})[\/.\-](\d{1,2})$/);
-    if (ymdMatch) {
-      return new Date(parseInt(ymdMatch[1], 10), parseInt(ymdMatch[2], 10) - 1, parseInt(ymdMatch[3], 10)).getTime();
-    }
-    return 0;
-  };
-
-  const formatDateLabel = (value: string): string => {
-    const trimmed = value.trim();
-    if (!trimmed) return "";
-    if (/^\d+(\.\d+)?$/.test(trimmed)) {
-      const numeric = Number(trimmed);
-      if (Number.isFinite(numeric)) {
-        const parsed = XLSX.SSF.parse_date_code(numeric);
-        if (parsed && parsed.y) {
-          return `${String(parsed.d).padStart(2, "0")}/${String(parsed.m).padStart(2, "0")}/${parsed.y}`;
-        }
-      }
-    }
-    const dmyMatch = trimmed.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})$/);
-    if (dmyMatch) return `${dmyMatch[1].padStart(2, "0")}/${dmyMatch[2].padStart(2, "0")}/${dmyMatch[3]}`;
-    const ymdMatch = trimmed.match(/^(\d{4})[\/.\-](\d{1,2})[\/.\-](\d{1,2})$/);
-    if (ymdMatch) return `${ymdMatch[3].padStart(2, "0")}/${ymdMatch[2].padStart(2, "0")}/${ymdMatch[1]}`;
-    return trimmed;
-  };
-
-  const formatDuration = (days: number): string => {
-    if (days === 0) return "אותו יום";
-    if (days < 30) return `${days} ימים`;
-    const months = Math.floor(days / 30.44);
-    if (months < 12) return `${months} חודשים`;
-    const years = Math.floor(months / 12);
-    const rem = months % 12;
-    return rem > 0 ? `${years} שנה ו-${rem} חודשים` : `${years} שנה`;
-  };
-
   const transactionRows = useMemo(() => {
     const filtered = rows
       .map((row) => {

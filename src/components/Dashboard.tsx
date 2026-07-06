@@ -5,6 +5,8 @@ import AllocationChart from "./AllocationChart";
 import PnLTimeline from "./PnLTimeline";
 import BestWorstTrades from "./BestWorstTrades";
 import WinRateCard from "./WinRateCard";
+import PortfolioHealth from "./PortfolioHealth";
+import TargetAllocation from "./TargetAllocation";
 import { formatUsd, formatSignedUsd, formatPercent } from "../utils/format";
 
 type Portfolio = ReturnType<typeof usePortfolio>;
@@ -92,6 +94,8 @@ const Dashboard = ({ portfolio }: DashboardProps) => {
         />
       </div>
 
+      <PortfolioHealth portfolio={portfolio} />
+
       <div className="dashboard-charts">
         <div className="dashboard-card">
           <h3>חלוקת התיק{summary.hasLivePrices ? "" : " (לפי עלות)"}</h3>
@@ -115,6 +119,8 @@ const Dashboard = ({ portfolio }: DashboardProps) => {
           </div>
         </>
       )}
+
+      <TargetAllocation positions={positions} totalValue={summary.totalMarketValue} />
     </section>
   );
 };
