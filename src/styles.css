@@ -1687,7 +1687,11 @@ tbody tr:hover {
 /* Account Panel Styles */
 .account-panel {
   padding: 32px;
+  display: flex;
+  flex-direction: column;
 }
+
+.account-panel .trade-gantt-card { order: 99; }
 
 .account-panel h3 {
   margin: 0 0 32px;
@@ -1852,6 +1856,36 @@ tbody tr:hover {
   text-align: center;
   color: #64748b;
   padding: 24px 0;
+}
+
+.trade-gantt-help { text-align: center; margin: -8px 0 18px; }
+.trade-gantt-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #64748b; font-size: .82rem; margin-bottom: 12px; }
+.trade-gantt-actions { display: flex; gap: 6px; }
+.trade-gantt-actions .ghost { padding: 6px 10px; font-size: .8rem; }
+.trade-gantt-date-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.trade-gantt-date-controls label { display: inline-flex; align-items: center; gap: 6px; color: #334155; font-size: .8rem; }
+.trade-gantt-date-controls input { border: 1px solid #cbd5e1; border-radius: 8px; padding: 6px 8px; color: #0f172a; background: #fff; font: inherit; }
+.trade-gantt-viewport { user-select: none; touch-action: none; overflow: hidden; cursor: grab; padding: 8px 0 4px; }
+.trade-gantt-viewport:active { cursor: grabbing; }
+.trade-gantt-axis { display: flex; justify-content: space-between; margin: 0 74px 8px 130px; color: #94a3b8; font-size: .75rem; direction: ltr; }
+.trade-gantt-row { display: grid; grid-template-columns: 116px minmax(160px, 1fr) 58px; gap: 14px; align-items: center; min-height: 42px; }
+.trade-gantt-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.trade-gantt-label strong { color: #0f172a; font-size: .9rem; }
+.trade-gantt-label span { color: #64748b; font-size: .7rem; white-space: nowrap; }
+.trade-gantt-track { position: relative; height: 20px; border-radius: 999px; background: repeating-linear-gradient(90deg, #f1f5f9 0 1px, transparent 1px 25%); border-bottom: 1px solid #e2e8f0; direction: ltr; }
+.trade-gantt-bar { position: absolute; top: 4px; height: 12px; min-width: 10px; border-radius: 999px; color: white; font-size: .68rem; line-height: 12px; text-align: center; white-space: nowrap; overflow: visible; padding: 0 6px; box-sizing: border-box; }
+.trade-gantt-bar.profit { background: linear-gradient(90deg, #22c55e, #16a34a); }
+.trade-gantt-bar.loss { background: linear-gradient(90deg, #fb7185, #dc2626); }
+.trade-gantt-dots { position: absolute; top: 3px; width: 14px; height: 14px; transform: translateX(-50%); border: 3px solid white; border-radius: 50%; background: #16a34a; box-shadow: 0 1px 5px #64748b; z-index: 2; }
+.trade-gantt-dots.sell { background: #dc2626; }
+.trade-gantt-pnl { font-size: .78rem; font-weight: 700; text-align: left; direction: ltr; }
+.profit-text { color: #16a34a; }
+.loss-text { color: #dc2626; }
+@media (max-width: 700px) {
+  .trade-gantt-toolbar { align-items: flex-start; flex-direction: column; }
+  .trade-gantt-axis { margin-left: 96px; margin-right: 54px; }
+  .trade-gantt-row { grid-template-columns: 82px minmax(120px, 1fr) 48px; gap: 8px; }
+  .trade-gantt-label span { font-size: .62rem; }
 }
 
 .account-chart-tooltip {

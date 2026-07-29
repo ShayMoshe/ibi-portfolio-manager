@@ -11,7 +11,7 @@ import SortableTable, { Column as TableColumn } from "./SortableTable";
 import Dashboard from "./components/Dashboard";
 import StockSidebar, { SidebarItem } from "./components/StockSidebar";
 import { usePortfolio } from "./hooks/usePortfolio";
-import { IBI_COLUMNS, RawRow } from "./types";
+import { IBI_COLUMNS, RawRow, RealizedRound } from "./types";
 import { exportToExcel } from "./utils/exportExcel";
 import { formatNumber, formatSignedUsd } from "./utils/format";
 import { formatDateLabel, parseDateToTimestamp, parseDateYear } from "./utils/dates";
@@ -27,6 +27,59 @@ type Row = RawRow;
 const parseXlsxBuffer = async (buffer: ArrayBuffer): Promise<Row[]> => {
   const { parseArrayBuffer } = await import("./utils/ibiParser");
   return parseArrayBuffer(buffer);
+};
+
+const TradeGantt = ({ rounds }: { rounds: RealizedRound[] }) => {
+  const ordered = useMemo(
+    () => [...rounds].sort((a, b) => a.firstTimestamp - b.firstTimestamp),
+    [rounds]
+  );
+  const latestTimestamp = ordered.length ? ordered[ordered.length - 1].lastTimestamp : 0;
+  const defaultFrom = latestTimestamp ? new Date(latestTimestamp - 365 * 86400000).toISOString().slice(0, 10) : "";
+  const defaultTo = latestTimestamp ? new Date(latestTimestamp).toISOString().slice(0, 10) : "";
+  const [dateFrom, setDateFrom] = useState(defaultFrom);
+  const [dateTo, setDateTo] = useState(defaultTo);
+  useEffect(() => {
+    setDateFrom(defaultFrom);
+    setDateTo(defaultTo);
+  }, [defaultFrom, defaultTo]);
+  const fromTimestamp = dateFrom ? new Date(`${dateFrom}T00:00:00`).getTime() : -Infinity;
+  const toTimestamp = dateTo ? new Date(`${dateTo}T23:59:59`).getTime() : Infinity;
+  const visible = ordered.filter((round) => round.lastTimestamp >= fromTimestamp && round.firstTimestamp <= toTimestamp);
+  const minTime = dateFrom ? fromTimestamp : (visible.length ? Math.min(...visible.map((r) => r.firstTimestamp)) : 0);
+  const maxTime = dateTo ? toTimestamp : (visible.length ? Math.max(...visible.map((r) => r.lastTimestamp)) : 0);
+  const span = Math.max(maxTime - minTime, 86400000);
+  const toX = (time: number) => `${Math.max(0, Math.min(100, ((time - minTime) / span) * 100))}%`;
+
+  if (ordered.length === 0) return <div className="account-chart-empty">אין עסקאות שהושלמו להצגה.</div>;
+
+  return (
+    <div className="trade-gantt">
+      <div className="trade-gantt-toolbar">
+        <span>טווח ברירת מחדל: 12 חודשים עד העסקה האחרונה</span>
+        <div className="trade-gantt-date-controls">
+          <label>מתאריך <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></label>
+          <label>עד תאריך <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></label>
+        </div>
+      </div>
+      <div className="trade-gantt-viewport">
+        <div className="trade-gantt-axis"><span>{new Date(minTime).toLocaleDateString("he-IL")}</span><span>{new Date(maxTime).toLocaleDateString("he-IL")}</span></div>
+        {visible.length === 0 ? <div className="account-chart-empty">אין עסקאות בטווח התאריכים שנבחר.</div> : visible.map((round) => (
+          <div className="trade-gantt-row" key={`${round.symbol}-${round.firstTimestamp}-${round.lastTimestamp}`}>
+            <div className="trade-gantt-label"><strong>{round.symbol}</strong><span>{round.firstDate} → {round.lastDate}</span></div>
+            <div className="trade-gantt-track">
+              <div className={`trade-gantt-bar ${round.finalPnL >= 0 ? "profit" : "loss"}`} style={{ left: toX(round.firstTimestamp), width: `${Math.max(1.5, ((round.lastTimestamp - round.firstTimestamp) / span) * 100)}%` }}>
+                <span>{round.finalPnL >= 0 ? "+" : ""}${formatNumber(round.finalPnL)}</span>
+              </div>
+              <div className="trade-gantt-dots" style={{ left: toX(round.firstTimestamp) }} title={`קנייה: ${round.firstDate}`} />
+              <div className="trade-gantt-dots sell" style={{ left: toX(round.lastTimestamp) }} title={`מכירה: ${round.lastDate}`} />
+            </div>
+            <div className={`trade-gantt-pnl ${round.finalPnL >= 0 ? "profit-text" : "loss-text"}`}>{round.returnPercent >= 0 ? "+" : ""}{round.returnPercent.toFixed(1)}%</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 };
 
 const validateYears = (rows: Row[]) => {
@@ -610,6 +663,70 @@ const App = () => {
           cumulativeAmount: cumulative,
         };
       });
+  }, [rows]);
+
+  const feesByMonth = useMemo(() => {
+    type MonthEntry = {
+      monthKey: string;
+      monthLabel: string;
+      timestamp: number;
+      amount: number;
+      details: { dateLabel: string; amount: number }[];
+    };
+
+    const fees: { dateLabel: string; timestamp: number; amount: number }[] = [];
+
+    rows.forEach((row) => {
+      const ticker = row["מס' נייר / סימבול"].trim();
+      const fee = Math.abs(parseFloat(row["עמלת פעולה"].trim()) || 0);
+      if (!ticker || /^\d+$/.test(ticker) || fee === 0) {
+        return;
+      }
+
+      const dateValue = row["תאריך"].trim();
+      const dateLabel = formatDateLabel(dateValue);
+      const timestamp = parseDateToTimestamp(dateValue);
+      if (!dateLabel || !timestamp) {
+        return;
+      }
+      fees.push({ dateLabel, timestamp, amount: fee });
+    });
+
+    if (fees.length === 0) {
+      return [] as MonthEntry[];
+    }
+
+    fees.sort((a, b) => a.timestamp - b.timestamp);
+    const monthMap = new Map<string, MonthEntry>();
+    const first = new Date(fees[0].timestamp);
+    const last = new Date(fees[fees.length - 1].timestamp);
+    const start = new Date(first.getFullYear(), first.getMonth(), 1);
+    const end = new Date(last.getFullYear(), last.getMonth(), 1);
+
+    for (let cursor = new Date(start); cursor <= end; cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1)) {
+      const year = cursor.getFullYear();
+      const month = cursor.getMonth() + 1;
+      const monthKey = `${year}-${String(month).padStart(2, "0")}`;
+      monthMap.set(monthKey, {
+        monthKey,
+        monthLabel: `${String(month).padStart(2, "0")}/${year}`,
+        timestamp: cursor.getTime(),
+        amount: 0,
+        details: [],
+      });
+    }
+
+    fees.forEach((entry) => {
+      const date = new Date(entry.timestamp);
+      const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+      const monthEntry = monthMap.get(monthKey);
+      if (monthEntry) {
+        monthEntry.amount += entry.amount;
+        monthEntry.details.push({ dateLabel: entry.dateLabel, amount: entry.amount });
+      }
+    });
+
+    return Array.from(monthMap.values()).sort((a, b) => a.timestamp - b.timestamp);
   }, [rows]);
 
   const stocksTableColumns = useMemo<TableColumn<{ TICKER: string; "כמות במניה": string; 'סה"כ עמלות': string; 'סה"כ דיבידנד': string; 'סה"כ מס': string }>[]>(
@@ -1328,6 +1445,51 @@ const App = () => {
                             }}
                           />
                           <Bar dataKey="amount" fill="#22c55e" radius={[6, 6, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </div>
+
+                <div className="account-chart-card trade-gantt-card">
+                  <div className="account-chart-header">ציר עסקאות — קנייה עד מכירה</div>
+                  <p className="account-card-subtext trade-gantt-help">הנקודה הירוקה היא קנייה, הנקודה האדומה היא המכירה האחרונה בסבב. הסכום על הפס מציג רווח/הפסד לאחר מס ועמלות.</p>
+                  <TradeGantt rounds={portfolio.realizedRounds} />
+                </div>
+
+                <div className="account-chart-card">
+                  <div className="account-chart-header">עמלות לפי חודש ($)</div>
+                  {feesByMonth.length === 0 ? (
+                    <div className="account-chart-empty">אין עמלות להצגה.</div>
+                  ) : (
+                    <div className="account-chart">
+                      <ResponsiveContainer width="100%" height={280}>
+                        <BarChart data={feesByMonth} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                          <XAxis dataKey="monthLabel" tick={{ fontSize: 12 }} />
+                          <YAxis tick={{ fontSize: 12 }} tickFormatter={(value) => `$${formatNumber(Number(value) || 0)}`} />
+                          <Tooltip
+                            content={({ active, payload }) => {
+                              if (!active || !payload || payload.length === 0) return null;
+                              const data = payload[0].payload as { monthLabel: string; amount: number; details: { dateLabel: string; amount: number }[] };
+                              return (
+                                <div className="account-chart-tooltip">
+                                  <div className="account-chart-tooltip-title">חודש: {data.monthLabel}</div>
+                                  <div className="account-chart-tooltip-total" style={{ color: "#dc2626" }}>
+                                    סה&quot;כ: ${formatNumber(data.amount)}
+                                  </div>
+                                  <div className="account-chart-tooltip-list">
+                                    {data.details.map((item, index) => (
+                                      <div key={`${item.dateLabel}-${index}`} className="account-chart-tooltip-row">
+                                        <span>{item.dateLabel}</span>
+                                        <span>${formatNumber(item.amount)}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              );
+                            }}
+                          />
+                          <Bar dataKey="amount" fill="#ef4444" radius={[6, 6, 0, 0]} />
                         </BarChart>
                       </ResponsiveContainer>
                     </div>
