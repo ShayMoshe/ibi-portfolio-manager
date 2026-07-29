@@ -1,6 +1,6 @@
 # IBI Portfolio Manager (Frontend)
 
-This is a frontend-only React SPA built with Vite. It lets you upload one or more XLSX files and merges all rows from every sheet into a single table with real-time stock prices.
+This is a frontend-only React SPA built with Vite. It lets you upload one or more IBI XLSX files, derives holdings/realized performance locally in the browser, and enriches the portfolio with free market-price data when available.
 
 🌐 **Live Demo:** [https://shaymoshe.github.io/ibi-portfolio-manager/](https://shaymoshe.github.io/ibi-portfolio-manager/)
 
@@ -12,6 +12,18 @@ This is a frontend-only React SPA built with Vite. It lets you upload one or mor
 - 📱 Responsive design
 - ✅ Year validation for data integrity
 - 🎯 Filter active stocks only
+- 🧭 Portfolio health checks: concentration, fee drag, price coverage, dividends
+- ⚖️ Local target-allocation and rebalancing view
+- 🧾 Tax estimate export for realized gains/losses
+- 🕘 Local upload-history metadata
+
+## Privacy and state model
+
+- No server
+- No login
+- No paid API key
+- Portfolio files are parsed in the browser
+- Local browser storage is used only for convenience features such as session restore, price cache, alerts, target allocation and upload-history metadata
 
 ## Getting started
 
@@ -20,18 +32,11 @@ npm install
 npm run dev
 ```
 
-## Stock Price API Configuration
+## Stock Price Data
 
-The app uses Alpha Vantage API to fetch real-time stock prices. To configure your API key:
+The app uses Yahoo Finance chart endpoints and free public CORS fallbacks. No API key is required.
 
-1. Get a free API key from [Alpha Vantage](https://www.alphavantage.co/support/#api-key)
-2. Open `src/stockPriceService.ts`
-3. Replace the `ALPHA_VANTAGE_API_KEY` value with your key:
-   ```typescript
-   const ALPHA_VANTAGE_API_KEY = "YOUR_API_KEY_HERE";
-   ```
-
-**Note:** The free tier allows 5 API requests per minute and 25 requests per day.
+Because the app stays serverless, price availability depends on the free public endpoints and browser/network limits. Cached prices are used when fresh data is unavailable.
 
 ### Smart Caching System
 
@@ -41,6 +46,10 @@ To work around API rate limits, the app implements a two-tier caching system:
 - **localStorage Cache**: 24 hours - Persistent across browser sessions, reducing API calls significantly
 
 This means once you view a stock's details, the data is cached for 24 hours even if you close the browser. If you hit the daily rate limit, you'll see cached data with a friendly notification.
+
+## Development sample files
+
+Dev mode can auto-load local XLSX files listed in `dev-data/manifest.json`. This keeps sample files out of the production bundle.
 
 ## Build
 

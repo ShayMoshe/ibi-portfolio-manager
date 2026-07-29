@@ -1,6 +1,8 @@
-import * as XLSX from "xlsx";
+import type { WorkBook, WorkSheet } from "xlsx";
 import { IBI_COLUMNS, IbiColumn, RawRow, Transaction, BUY_ACTIONS, SELL_ACTIONS } from "../types";
 import { formatDateLabel, parseDateToTimestamp, parseDateYear } from "./dates";
+
+type XlsxModule = typeof import("xlsx");
 
 const normalizeHeader = (value: unknown) =>
   String(value ?? "")
@@ -12,7 +14,7 @@ const isRowEmpty = (row: unknown[]) => row.every((cell) => normalizeHeader(cell)
 const num = (value: string): number => parseFloat(String(value ?? "").trim()) || 0;
 
 // Read every data row of one sheet into RawRow records keyed by IBI_COLUMNS.
-const readSheetRows = (sheet: XLSX.WorkSheet): RawRow[] => {
+const readSheetRows = (sheet: WorkSheet, XLSX: XlsxModule): RawRow[] => {
   const rawRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" }) as unknown[][];
   if (rawRows.length < 2) return [];
 
@@ -43,20 +45,27 @@ const readSheetRows = (sheet: XLSX.WorkSheet): RawRow[] => {
 };
 
 // Parse an entire workbook (all sheets merged) into RawRows.
-export const parseWorkbook = (workbook: XLSX.WorkBook): RawRow[] => {
+export const parseWorkbook = (workbook: WorkBook, XLSX: XlsxModule): RawRow[] => {
   const rows: RawRow[] = [];
   workbook.SheetNames.forEach((name) => {
     const sheet = workbook.Sheets[name];
-    if (sheet) rows.push(...readSheetRows(sheet));
+    if (sheet) rows.push(...readSheetRows(sheet, XLSX));
   });
   return rows;
+};
+
+// Parse an XLSX ArrayBuffer into RawRows. Useful for both uploaded files and
+// dev-data URLs without duplicating XLSX.read call sites.
+export const parseArrayBuffer = async (buffer: ArrayBuffer): Promise<RawRow[]> => {
+  const XLSX = await import("xlsx");
+  const workbook = XLSX.read(buffer, { type: "array" });
+  return parseWorkbook(workbook, XLSX);
 };
 
 // Parse one uploaded file into RawRows.
 export const parseFile = async (file: File): Promise<RawRow[]> => {
   const buffer = await file.arrayBuffer();
-  const workbook = XLSX.read(buffer, { type: "array" });
-  return parseWorkbook(workbook);
+  return await parseArrayBuffer(buffer);
 };
 
 const col = (row: RawRow, column: IbiColumn) => String(row[column] ?? "").trim();

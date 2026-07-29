@@ -17,7 +17,6 @@ import {
   fetchMultipleStockPrices,
   getCachedStockPrice,
   StockPrice,
-  MissingApiKeyError,
   RateLimitError,
 } from "../stockPriceService";
 
@@ -81,12 +80,10 @@ export const usePortfolio = (rows: RawRow[]) => {
       const fresh = await fetchMultipleStockPrices(openSymbols);
       if (fresh.size > 0) setLivePrices((prev) => new Map([...prev, ...fresh]));
     } catch (err) {
-      if (err instanceof MissingApiKeyError) {
-        setPriceError("חסר מפתח API של Finnhub. הגדר VITE_FINNHUB_API_KEY בקובץ .env.local.");
-      } else if (err instanceof RateLimitError) {
-        setPriceError("הגעת למגבלת ה-API (60 בקשות לדקה). נסה שוב מאוחר יותר.");
+      if (err instanceof RateLimitError) {
+        setPriceError("מקור המחירים החינמי הגיע למגבלת שימוש זמנית. נסה שוב מאוחר יותר.");
       } else {
-        setPriceError("שגיאה בטעינת מחירים.");
+        setPriceError("שגיאה בטעינת מחירים ממקור חינמי. יוצגו נתונים מהמטמון אם קיימים.");
       }
     } finally {
       setPricesLoading(false);

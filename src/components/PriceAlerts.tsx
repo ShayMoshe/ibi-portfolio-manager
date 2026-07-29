@@ -120,9 +120,8 @@ const PriceAlerts = ({ symbols, livePrices }: PriceAlertsProps) => {
         />
         <button
           type="button"
-          className="upload"
+          className="upload alert-add-button"
           onClick={addAlert}
-          style={{ padding: "8px 16px", fontSize: "0.88rem" }}
         >
           + הוסף התראה
         </button>
@@ -153,7 +152,7 @@ const PriceAlerts = ({ symbols, livePrices }: PriceAlertsProps) => {
           })}
         </div>
       ) : (
-        <p className="empty" style={{ padding: "20px 0" }}>
+        <p className="empty alerts-empty">
           אין התראות. הגדר התראה ראשונה למעלה.
         </p>
       )}

@@ -4,7 +4,6 @@ import {
   getCachedStockPrice,
   StockPrice,
   RateLimitError,
-  MissingApiKeyError,
 } from "./stockPriceService";
 import { parseDateToTimestamp, formatDateLabel, formatDuration } from "./utils/dates";
 import { formatNumber, formatUsd, formatSignedUsd, formatPercent } from "./utils/format";
@@ -361,12 +360,10 @@ const StockDetail = ({
         if (priceData) setPrice(priceData);
       } catch (err) {
         console.error("Failed to load stock price:", err);
-        if (err instanceof MissingApiKeyError) {
-          setPriceError("חסר מפתח API של Finnhub. הגדר VITE_FINNHUB_API_KEY בקובץ .env.local.");
-        } else if (err instanceof RateLimitError) {
-          setPriceError("הגעת למגבלת השימוש של ה-API עבור מחיר המניה (60 בקשות לדקה). נסה שוב מאוחר יותר.");
+        if (err instanceof RateLimitError) {
+          setPriceError("מקור המחירים החינמי הגיע למגבלת שימוש זמנית. נסה שוב מאוחר יותר.");
         } else {
-          setPriceError("שגיאה בטעינת מחיר המניה. נסה שוב מאוחר יותר.");
+          setPriceError("שגיאה בטעינת מחיר המניה ממקור חינמי. יוצג מטמון אם קיים.");
         }
       }
 

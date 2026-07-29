@@ -70,7 +70,9 @@ const Analytics = ({ portfolio }: AnalyticsProps) => {
     const realTaxable = hasCpi ? Math.max(0, net - (costBasis * cpi) / 100) : taxable;
     const realTax = realTaxable * CAPITAL_GAINS_TAX_RATE;
 
-    return { gains, losses, net, costBasis, taxable, tax, hasCpi, realTaxable, realTax };
+    const lossShield = net < 0 ? Math.abs(net) : 0;
+
+    return { gains, losses, net, costBasis, taxable, tax, hasCpi, realTaxable, realTax, lossShield };
   }, [realizedRounds, taxScope, cpiPercent]);
 
   const perfRows: PerfRow[] = useMemo(
@@ -141,6 +143,38 @@ const Analytics = ({ portfolio }: AnalyticsProps) => {
     ],
     []
   );
+
+  const handleExportTax = () => {
+    const scopeLabel = taxScope === "all" ? "כל הזמן" : String(taxScope);
+    exportToExcel(
+      [
+        {
+          תקופה: scopeLabel,
+          "רווחים ($)": taxTotals.gains,
+          "הפסדים ($)": taxTotals.losses,
+          "נטו לפני מס ($)": taxTotals.net,
+          "בסיס חייב במס ($)": taxTotals.taxable,
+          "מס משוער 25% ($)": taxTotals.tax,
+          "מגן מס אפשרי ($)": taxTotals.lossShield,
+          "מדד/אינפלציה (%)": cpiPercent ? Number(cpiPercent) : 0,
+          "מס ריאלי משוער ($)": taxTotals.hasCpi ? taxTotals.realTax : taxTotals.tax,
+        },
+        ...yearlySummary.map((year) => ({
+          תקופה: String(year.year),
+          "רווחים ($)": year.gains,
+          "הפסדים ($)": year.losses,
+          "נטו לפני מס ($)": year.netFromTrading,
+          "בסיס חייב במס ($)": Math.max(0, year.netFromTrading),
+          "מס משוער 25% ($)": Math.max(0, year.netFromTrading) * CAPITAL_GAINS_TAX_RATE,
+          "מגן מס אפשרי ($)": year.netFromTrading < 0 ? Math.abs(year.netFromTrading) : 0,
+          "דיבידנד נטו ($)": year.dividendsNet,
+          "רווח נטו סופי ($)": year.finalPnL,
+        })),
+      ],
+      "ibi_tax_center",
+      "מס"
+    );
+  };
 
   return (
     <div className="analytics-panel">
@@ -249,6 +283,9 @@ const Analytics = ({ portfolio }: AnalyticsProps) => {
                 className="analytics-cpi-input"
               />
             </label>
+            <button type="button" className="export-btn" onClick={handleExportTax}>
+              ⬇ ייצוא סיכום מס
+            </button>
           </div>
         </div>
 
@@ -275,6 +312,10 @@ const Analytics = ({ portfolio }: AnalyticsProps) => {
             <span className="analytics-tax-label">מס משוער (25%)</span>
             <span className="mono val-negative">{formatUsd(taxTotals.tax)}</span>
           </div>
+          <div className="analytics-tax-item">
+            <span className="analytics-tax-label">מגן מס אפשרי</span>
+            <span className="mono">{taxTotals.lossShield > 0 ? formatUsd(taxTotals.lossShield) : "-"}</span>
+          </div>
           {taxTotals.hasCpi && (
             <div className="analytics-tax-item highlight">
               <span className="analytics-tax-label">מס ריאלי משוער</span>
@@ -284,6 +325,7 @@ const Analytics = ({ portfolio }: AnalyticsProps) => {
         </div>
         <p className="analytics-tax-note">
           אומדן בלבד. חישוב שנתי מקזז רווחים מול הפסדים; המס מחושב על הרווח הריאלי בלבד.
+          {" "}הייצוא נוצר מקומית בדפדפן ואינו שולח נתונים החוצה.
           {taxTotals.hasCpi
             ? ` הבסיס הריאלי מתחשב באינפלציה של ${formatNumber(parseFloat(cpiPercent))}% על עלות הרכישה.`
             : ""}

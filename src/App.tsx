@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import * as XLSX from "xlsx";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -9,144 +8,78 @@ import {
   YAxis,
 } from "recharts";
 import SortableTable, { Column as TableColumn } from "./SortableTable";
-import StockDetail from "./StockDetail";
-import ClosedPositionDetail from "./ClosedPositionDetail";
 import Dashboard from "./components/Dashboard";
-import Analytics from "./components/Analytics";
-import PriceAlerts from "./components/PriceAlerts";
 import StockSidebar, { SidebarItem } from "./components/StockSidebar";
 import { usePortfolio } from "./hooks/usePortfolio";
+import { IBI_COLUMNS, RawRow, RealizedRound } from "./types";
 import { exportToExcel } from "./utils/exportExcel";
-import { formatSignedUsd } from "./utils/format";
+import { formatNumber, formatSignedUsd } from "./utils/format";
+import { formatDateLabel, parseDateToTimestamp, parseDateYear } from "./utils/dates";
 
-const columns = [
-  "תאריך",
-  "סוג פעולה",
-  "שם נייר",
-  "מס' נייר / סימבול",
-  "כמות",
-  "שער ביצוע",
-  "מטבע",
-  "עמלת פעולה",
-  "עמלות נלוות",
-  "תמורה במט\"ח",
-  "תמורה בשקלים",
-  "יתרה שקלית",
-  "אומדן מס רווחי הון",
-] as const;
+const StockDetail = lazy(() => import("./StockDetail"));
+const ClosedPositionDetail = lazy(() => import("./ClosedPositionDetail"));
+const Analytics = lazy(() => import("./components/Analytics"));
+const PriceAlerts = lazy(() => import("./components/PriceAlerts"));
 
-type Column = (typeof columns)[number];
-type Row = Record<Column, string>;
+const columns = IBI_COLUMNS;
+type Row = RawRow;
 
-const normalizeHeader = (value: unknown) =>
-  String(value ?? "")
-    .replace(/\s+/g, " ")
-    .trim();
-
-const isRowEmpty = (row: unknown[]) =>
-  row.every((cell) => normalizeHeader(cell) === "");
-
-const parseDateYear = (value: string) => {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  if (/^\d+(\.\d+)?$/.test(trimmed)) {
-    const numeric = Number(trimmed);
-    if (Number.isFinite(numeric)) {
-      const parsed = XLSX.SSF.parse_date_code(numeric);
-      if (parsed && parsed.y) {
-        return parsed.y;
-      }
-    }
-  }
-
-  const dmyMatch = trimmed.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})$/);
-  if (dmyMatch) {
-    return Number(dmyMatch[3]);
-  }
-
-  const ymdMatch = trimmed.match(/^(\d{4})[\/.\-](\d{1,2})[\/.\-](\d{1,2})$/);
-  if (ymdMatch) {
-    return Number(ymdMatch[1]);
-  }
-
-  return null;
+const parseXlsxBuffer = async (buffer: ArrayBuffer): Promise<Row[]> => {
+  const { parseArrayBuffer } = await import("./utils/ibiParser");
+  return parseArrayBuffer(buffer);
 };
 
-// Parse date to timestamp for sorting
-const parseDateToTimestamp = (value: string): number => {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return 0;
-  }
+const TradeGantt = ({ rounds }: { rounds: RealizedRound[] }) => {
+  const ordered = useMemo(
+    () => [...rounds].sort((a, b) => a.firstTimestamp - b.firstTimestamp),
+    [rounds]
+  );
+  const latestTimestamp = ordered.length ? ordered[ordered.length - 1].lastTimestamp : 0;
+  const defaultFrom = latestTimestamp ? new Date(latestTimestamp - 365 * 86400000).toISOString().slice(0, 10) : "";
+  const defaultTo = latestTimestamp ? new Date(latestTimestamp).toISOString().slice(0, 10) : "";
+  const [dateFrom, setDateFrom] = useState(defaultFrom);
+  const [dateTo, setDateTo] = useState(defaultTo);
+  useEffect(() => {
+    setDateFrom(defaultFrom);
+    setDateTo(defaultTo);
+  }, [defaultFrom, defaultTo]);
+  const fromTimestamp = dateFrom ? new Date(`${dateFrom}T00:00:00`).getTime() : -Infinity;
+  const toTimestamp = dateTo ? new Date(`${dateTo}T23:59:59`).getTime() : Infinity;
+  const visible = ordered.filter((round) => round.lastTimestamp >= fromTimestamp && round.firstTimestamp <= toTimestamp);
+  const minTime = dateFrom ? fromTimestamp : (visible.length ? Math.min(...visible.map((r) => r.firstTimestamp)) : 0);
+  const maxTime = dateTo ? toTimestamp : (visible.length ? Math.max(...visible.map((r) => r.lastTimestamp)) : 0);
+  const span = Math.max(maxTime - minTime, 86400000);
+  const toX = (time: number) => `${Math.max(0, Math.min(100, ((time - minTime) / span) * 100))}%`;
 
-  // Try Excel date number
-  if (/^\d+(\.\d+)?$/.test(trimmed)) {
-    const numeric = Number(trimmed);
-    if (Number.isFinite(numeric)) {
-      const parsed = XLSX.SSF.parse_date_code(numeric);
-      if (parsed && parsed.y) {
-        return new Date(parsed.y, parsed.m - 1, parsed.d).getTime();
-      }
-    }
-  }
+  if (ordered.length === 0) return <div className="account-chart-empty">אין עסקאות שהושלמו להצגה.</div>;
 
-  // Try DD/MM/YYYY format
-  const dmyMatch = trimmed.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})$/);
-  if (dmyMatch) {
-    const day = parseInt(dmyMatch[1], 10);
-    const month = parseInt(dmyMatch[2], 10) - 1; // month is 0-indexed
-    const year = parseInt(dmyMatch[3], 10);
-    return new Date(year, month, day).getTime();
-  }
-
-  // Try YYYY-MM-DD format
-  const ymdMatch = trimmed.match(/^(\d{4})[\/.\-](\d{1,2})[\/.\-](\d{1,2})$/);
-  if (ymdMatch) {
-    const year = parseInt(ymdMatch[1], 10);
-    const month = parseInt(ymdMatch[2], 10) - 1;
-    const day = parseInt(ymdMatch[3], 10);
-    return new Date(year, month, day).getTime();
-  }
-
-  return 0;
-};
-
-const formatDateLabel = (value: string): string => {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-
-  if (/^\d+(\.\d+)?$/.test(trimmed)) {
-    const numeric = Number(trimmed);
-    if (Number.isFinite(numeric)) {
-      const parsed = XLSX.SSF.parse_date_code(numeric);
-      if (parsed && parsed.y) {
-        const day = String(parsed.d).padStart(2, "0");
-        const month = String(parsed.m).padStart(2, "0");
-        return `${day}/${month}/${parsed.y}`;
-      }
-    }
-  }
-
-  const dmyMatch = trimmed.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})$/);
-  if (dmyMatch) {
-    const day = dmyMatch[1].padStart(2, "0");
-    const month = dmyMatch[2].padStart(2, "0");
-    return `${day}/${month}/${dmyMatch[3]}`;
-  }
-
-  const ymdMatch = trimmed.match(/^(\d{4})[\/.\-](\d{1,2})[\/.\-](\d{1,2})$/);
-  if (ymdMatch) {
-    const day = ymdMatch[3].padStart(2, "0");
-    const month = ymdMatch[2].padStart(2, "0");
-    return `${day}/${month}/${ymdMatch[1]}`;
-  }
-
-  return trimmed;
+  return (
+    <div className="trade-gantt">
+      <div className="trade-gantt-toolbar">
+        <span>טווח ברירת מחדל: 12 חודשים עד העסקה האחרונה</span>
+        <div className="trade-gantt-date-controls">
+          <label>מתאריך <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></label>
+          <label>עד תאריך <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></label>
+        </div>
+      </div>
+      <div className="trade-gantt-viewport">
+        <div className="trade-gantt-axis"><span>{new Date(minTime).toLocaleDateString("he-IL")}</span><span>{new Date(maxTime).toLocaleDateString("he-IL")}</span></div>
+        {visible.length === 0 ? <div className="account-chart-empty">אין עסקאות בטווח התאריכים שנבחר.</div> : visible.map((round) => (
+          <div className="trade-gantt-row" key={`${round.symbol}-${round.firstTimestamp}-${round.lastTimestamp}`}>
+            <div className="trade-gantt-label"><strong>{round.symbol}</strong><span>{round.firstDate} → {round.lastDate}</span></div>
+            <div className="trade-gantt-track">
+              <div className={`trade-gantt-bar ${round.finalPnL >= 0 ? "profit" : "loss"}`} style={{ left: toX(round.firstTimestamp), width: `${Math.max(1.5, ((round.lastTimestamp - round.firstTimestamp) / span) * 100)}%` }}>
+                <span>{round.finalPnL >= 0 ? "+" : ""}${formatNumber(round.finalPnL)}</span>
+              </div>
+              <div className="trade-gantt-dots" style={{ left: toX(round.firstTimestamp) }} title={`קנייה: ${round.firstDate}`} />
+              <div className="trade-gantt-dots sell" style={{ left: toX(round.lastTimestamp) }} title={`מכירה: ${round.lastDate}`} />
+            </div>
+            <div className={`trade-gantt-pnl ${round.finalPnL >= 0 ? "profit-text" : "loss-text"}`}>{round.returnPercent >= 0 ? "+" : ""}{round.returnPercent.toFixed(1)}%</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 };
 
 const validateYears = (rows: Row[]) => {
@@ -207,70 +140,37 @@ const validateYears = (rows: Row[]) => {
   };
 };
 
-const readSheetRows = (sheet: XLSX.WorkSheet): Row[] => {
-  const rawRows = XLSX.utils.sheet_to_json(sheet, {
-    header: 1,
-    defval: "",
-  }) as unknown[][];
-
-  if (rawRows.length < 2) {
-    return [];
-  }
-
-  const headerRow = rawRows[0] ?? [];
-  const headerIndex = new Map<string, number>();
-
-  headerRow.forEach((cell, index) => {
-    const key = normalizeHeader(cell);
-    if (key) {
-      headerIndex.set(key, index);
-    }
-  });
-
-  if (headerIndex.size === 0) {
-    return [];
-  }
-
-  const rows: Row[] = [];
-
-  for (let i = 1; i < rawRows.length; i += 1) {
-    const rawRow = rawRows[i] ?? [];
-    if (isRowEmpty(rawRow)) {
-      continue;
-    }
-
-    const row: Row = columns.reduce((acc, column) => {
-      const idx = headerIndex.get(normalizeHeader(column));
-      const value = idx === undefined ? "" : rawRow[idx];
-      acc[column] = value === undefined || value === null ? "" : String(value);
-      return acc;
-    }, {} as Row);
-
-    rows.push(row);
-  }
-
-  return rows;
-};
-
-const parseWorkbook = (workbook: XLSX.WorkBook) => {
-  const rows: Row[] = [];
-
-  workbook.SheetNames.forEach((name) => {
-    const sheet = workbook.Sheets[name];
-    if (!sheet) {
-      return;
-    }
-
-    rows.push(...readSheetRows(sheet));
-  });
-
-  return rows;
-};
-
 // Persist uploaded data for the lifetime of the browser tab so a page refresh
 // doesn't wipe it. Dev mode auto-loads from /dev-data instead, so we skip the
 // session cache there to keep that flow untouched.
 const SESSION_KEY = "ibi_session_data";
+const IMPORT_HISTORY_KEY = "ibi_import_history";
+
+type ImportHistoryEntry = {
+  id: string;
+  createdAt: number;
+  fileNames: string[];
+  rowCount: number;
+};
+
+const readImportHistory = (): ImportHistoryEntry[] => {
+  try {
+    const raw = localStorage.getItem(IMPORT_HISTORY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as ImportHistoryEntry[];
+    return Array.isArray(parsed) ? parsed.slice(0, 8) : [];
+  } catch {
+    return [];
+  }
+};
+
+const saveImportHistory = (history: ImportHistoryEntry[]) => {
+  try {
+    localStorage.setItem(IMPORT_HISTORY_KEY, JSON.stringify(history.slice(0, 8)));
+  } catch {
+    /* local history is optional */
+  }
+};
 
 const readSession = (): { rows: Row[]; fileNames: string[] } | null => {
   if (import.meta.env.DEV) return null;
@@ -350,6 +250,7 @@ const App = () => {
     return v === "active" || v === "closed" ? v : null;
   });
   const [fileNames, setFileNames] = useState<string[]>(() => getBootSession()?.fileNames ?? []);
+  const [importHistory, setImportHistory] = useState<ImportHistoryEntry[]>(readImportHistory);
   const [isDragging, setIsDragging] = useState(false);
 
   // Keep the open stock / past-trade page in the URL so a refresh restores it.
@@ -764,6 +665,70 @@ const App = () => {
       });
   }, [rows]);
 
+  const feesByMonth = useMemo(() => {
+    type MonthEntry = {
+      monthKey: string;
+      monthLabel: string;
+      timestamp: number;
+      amount: number;
+      details: { dateLabel: string; amount: number }[];
+    };
+
+    const fees: { dateLabel: string; timestamp: number; amount: number }[] = [];
+
+    rows.forEach((row) => {
+      const ticker = row["מס' נייר / סימבול"].trim();
+      const fee = Math.abs(parseFloat(row["עמלת פעולה"].trim()) || 0);
+      if (!ticker || /^\d+$/.test(ticker) || fee === 0) {
+        return;
+      }
+
+      const dateValue = row["תאריך"].trim();
+      const dateLabel = formatDateLabel(dateValue);
+      const timestamp = parseDateToTimestamp(dateValue);
+      if (!dateLabel || !timestamp) {
+        return;
+      }
+      fees.push({ dateLabel, timestamp, amount: fee });
+    });
+
+    if (fees.length === 0) {
+      return [] as MonthEntry[];
+    }
+
+    fees.sort((a, b) => a.timestamp - b.timestamp);
+    const monthMap = new Map<string, MonthEntry>();
+    const first = new Date(fees[0].timestamp);
+    const last = new Date(fees[fees.length - 1].timestamp);
+    const start = new Date(first.getFullYear(), first.getMonth(), 1);
+    const end = new Date(last.getFullYear(), last.getMonth(), 1);
+
+    for (let cursor = new Date(start); cursor <= end; cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1)) {
+      const year = cursor.getFullYear();
+      const month = cursor.getMonth() + 1;
+      const monthKey = `${year}-${String(month).padStart(2, "0")}`;
+      monthMap.set(monthKey, {
+        monthKey,
+        monthLabel: `${String(month).padStart(2, "0")}/${year}`,
+        timestamp: cursor.getTime(),
+        amount: 0,
+        details: [],
+      });
+    }
+
+    fees.forEach((entry) => {
+      const date = new Date(entry.timestamp);
+      const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+      const monthEntry = monthMap.get(monthKey);
+      if (monthEntry) {
+        monthEntry.amount += entry.amount;
+        monthEntry.details.push({ dateLabel: entry.dateLabel, amount: entry.amount });
+      }
+    });
+
+    return Array.from(monthMap.values()).sort((a, b) => a.timestamp - b.timestamp);
+  }, [rows]);
+
   const stocksTableColumns = useMemo<TableColumn<{ TICKER: string; "כמות במניה": string; 'סה"כ עמלות': string; 'סה"כ דיבידנד': string; 'סה"כ מס': string }>[]>(
     () => [
       {
@@ -934,12 +899,22 @@ const App = () => {
 
       for (const file of fileArray) {
         const buffer = await file.arrayBuffer();
-        const workbook = XLSX.read(buffer, { type: "array" });
-        allRows.push(...parseWorkbook(workbook));
+        allRows.push(...(await parseXlsxBuffer(buffer)));
       }
 
       setFileNames(fileArray.map((file) => file.name));
       setRows(allRows);
+      const historyEntry: ImportHistoryEntry = {
+        id: `${Date.now()}-${fileArray.length}`,
+        createdAt: Date.now(),
+        fileNames: fileArray.map((file) => file.name),
+        rowCount: allRows.length,
+      };
+      setImportHistory((prev) => {
+        const next = [historyEntry, ...prev].slice(0, 8);
+        saveImportHistory(next);
+        return next;
+      });
       if (allRows.length === 0) {
         setValidationError(null);
         setStatus("No rows found in the uploaded files.");
@@ -1025,35 +1000,34 @@ const App = () => {
       if (!import.meta.env.DEV) return;
 
       try {
-        // Use Vite's import.meta.glob to find all .xlsx files in dev-data folder
-        const devFiles = import.meta.glob('../dev-data/*.xlsx', { 
-          query: '?url',
-          import: 'default' 
-        });
+        const baseUrl = import.meta.env.BASE_URL;
+        const manifestResponse = await fetch(`${baseUrl}dev-data/manifest.json`);
+        if (!manifestResponse.ok) {
+          console.log("No dev-data manifest found");
+          return;
+        }
+        const devFileNames = (await manifestResponse.json()) as string[];
+        const xlsxFileNames = devFileNames.filter((name) => name.endsWith(".xlsx"));
 
-        const fileKeys = Object.keys(devFiles);
-        
-        if (fileKeys.length === 0) {
+        if (xlsxFileNames.length === 0) {
           console.log('No dev files found in dev-data folder');
           return;
         }
 
-        console.log(`Found ${fileKeys.length} dev file(s), auto-loading...`);
+        console.log(`Found ${xlsxFileNames.length} dev file(s), auto-loading...`);
         setIsLoading(true);
         setStatus("Loading dev files...");
 
         const allRows: Row[] = [];
 
-        for (const filePath of fileKeys) {
-          const urlModule = await devFiles[filePath]();
-          const url = urlModule as string;
+        for (const fileName of xlsxFileNames) {
+          const url = `${baseUrl}dev-data/${encodeURIComponent(fileName)}`;
           const response = await fetch(url);
           const buffer = await response.arrayBuffer();
-          const workbook = XLSX.read(buffer, { type: "array" });
-          allRows.push(...parseWorkbook(workbook));
+          allRows.push(...(await parseXlsxBuffer(buffer)));
         }
 
-        setFileNames(fileKeys.map((key) => key.split("/").pop() ?? key));
+        setFileNames(xlsxFileNames);
         setRows(allRows);
         if (allRows.length === 0) {
           setValidationError(null);
@@ -1065,7 +1039,7 @@ const App = () => {
             setStatus(`שגיאת אימות: ${validation.message}`);
           } else {
             setValidationError(null);
-            setStatus(`✓ Auto-loaded ${allRows.length} rows from ${fileKeys.length} dev file(s).`);
+            setStatus(`✓ Auto-loaded ${allRows.length} rows from ${xlsxFileNames.length} dev file(s).`);
           }
         }
       } catch (error) {
@@ -1078,16 +1052,6 @@ const App = () => {
 
     loadDevFiles();
   }, []); // Run once on mount
-
-  const formatNumber = (value: number): string => {
-    // Round to 2 decimal places
-    const rounded = Math.round(value * 100) / 100;
-    // Check if it's a whole number
-    if (rounded === Math.floor(rounded)) {
-      return rounded.toLocaleString('en-US');
-    }
-    return rounded.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  };
 
   // Which face of the open ticker to show. An explicit pick (e.g. clicking the
   // past-trade link on an active stock) wins; otherwise fall back to the
@@ -1130,24 +1094,26 @@ const App = () => {
             onSelect={(sym) => openTicker(sym, showClosedDetail ? "closed" : "active")}
           />
           <div className="detail-main">
-            {showClosedDetail ? (
-              <ClosedPositionDetail
-                ticker={selectedTicker}
-                rows={rows}
-                onBack={closeDetail}
-                hasActivePosition={heldTickersSet.has(selectedTicker)}
-                onViewActivePosition={() => openTicker(selectedTicker, "active")}
-              />
-            ) : (
-              <StockDetail
-                ticker={selectedTicker}
-                rows={rows}
-                onBack={closeDetail}
-                portfolioValue={portfolio.summary.totalMarketValue}
-                hasPastTrade={closedRoundTickersSet.has(selectedTicker)}
-                onViewPastTrade={() => openTicker(selectedTicker, "closed")}
-              />
-            )}
+            <Suspense fallback={<div className="loading">טוען פירוט מניה...</div>}>
+              {showClosedDetail ? (
+                <ClosedPositionDetail
+                  ticker={selectedTicker}
+                  rows={rows}
+                  onBack={closeDetail}
+                  hasActivePosition={heldTickersSet.has(selectedTicker)}
+                  onViewActivePosition={() => openTicker(selectedTicker, "active")}
+                />
+              ) : (
+                <StockDetail
+                  ticker={selectedTicker}
+                  rows={rows}
+                  onBack={closeDetail}
+                  portfolioValue={portfolio.summary.totalMarketValue}
+                  hasPastTrade={closedRoundTickersSet.has(selectedTicker)}
+                  onViewPastTrade={() => openTicker(selectedTicker, "closed")}
+                />
+              )}
+            </Suspense>
           </div>
         </div>
       ) : (
@@ -1394,6 +1360,47 @@ const App = () => {
                     </div>
                   </div>
                 </div>
+                <div className="account-chart-card import-history-card">
+                  <div className="account-chart-top-row">
+                    <div>
+                      <div className="account-chart-header">היסטוריית העלאות מקומית</div>
+                      <p className="account-card-subtext">
+                        נשמרים רק שמות קבצים, תאריך ומספר שורות בדפדפן הזה.
+                      </p>
+                    </div>
+                    {importHistory.length > 0 && (
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => {
+                          setImportHistory([]);
+                          saveImportHistory([]);
+                        }}
+                      >
+                        נקה היסטוריה
+                      </button>
+                    )}
+                  </div>
+                  {importHistory.length === 0 ? (
+                    <div className="account-chart-empty">אין היסטוריית העלאות מקומית.</div>
+                  ) : (
+                    <div className="import-history-list">
+                      {importHistory.map((entry) => (
+                        <div key={entry.id} className="import-history-item">
+                          <div>
+                            <div className="import-history-date">
+                              {new Date(entry.createdAt).toLocaleString("he-IL")}
+                            </div>
+                            <div className="import-history-files">
+                              {entry.fileNames.join(", ")}
+                            </div>
+                          </div>
+                          <span className="mono import-history-rows">{entry.rowCount} שורות</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <div className="account-chart-card">
                   <div className="account-chart-header">הפקדות לפי חודש</div>
                   {depositsByMonth.length === 0 ? (
@@ -1438,6 +1445,51 @@ const App = () => {
                             }}
                           />
                           <Bar dataKey="amount" fill="#22c55e" radius={[6, 6, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </div>
+
+                <div className="account-chart-card trade-gantt-card">
+                  <div className="account-chart-header">ציר עסקאות — קנייה עד מכירה</div>
+                  <p className="account-card-subtext trade-gantt-help">הנקודה הירוקה היא קנייה, הנקודה האדומה היא המכירה האחרונה בסבב. הסכום על הפס מציג רווח/הפסד לאחר מס ועמלות.</p>
+                  <TradeGantt rounds={portfolio.realizedRounds} />
+                </div>
+
+                <div className="account-chart-card">
+                  <div className="account-chart-header">עמלות לפי חודש ($)</div>
+                  {feesByMonth.length === 0 ? (
+                    <div className="account-chart-empty">אין עמלות להצגה.</div>
+                  ) : (
+                    <div className="account-chart">
+                      <ResponsiveContainer width="100%" height={280}>
+                        <BarChart data={feesByMonth} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                          <XAxis dataKey="monthLabel" tick={{ fontSize: 12 }} />
+                          <YAxis tick={{ fontSize: 12 }} tickFormatter={(value) => `$${formatNumber(Number(value) || 0)}`} />
+                          <Tooltip
+                            content={({ active, payload }) => {
+                              if (!active || !payload || payload.length === 0) return null;
+                              const data = payload[0].payload as { monthLabel: string; amount: number; details: { dateLabel: string; amount: number }[] };
+                              return (
+                                <div className="account-chart-tooltip">
+                                  <div className="account-chart-tooltip-title">חודש: {data.monthLabel}</div>
+                                  <div className="account-chart-tooltip-total" style={{ color: "#dc2626" }}>
+                                    סה&quot;כ: ${formatNumber(data.amount)}
+                                  </div>
+                                  <div className="account-chart-tooltip-list">
+                                    {data.details.map((item, index) => (
+                                      <div key={`${item.dateLabel}-${index}`} className="account-chart-tooltip-row">
+                                        <span>{item.dateLabel}</span>
+                                        <span>${formatNumber(item.amount)}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              );
+                            }}
+                          />
+                          <Bar dataKey="amount" fill="#ef4444" radius={[6, 6, 0, 0]} />
                         </BarChart>
                       </ResponsiveContainer>
                     </div>
@@ -1526,14 +1578,18 @@ const App = () => {
                 : "עדיין אין נתונים להצגה."}
             </p>
           ) : (
-            <Analytics portfolio={portfolio} />
+            <Suspense fallback={<div className="loading">טוען ניתוח...</div>}>
+              <Analytics portfolio={portfolio} />
+            </Suspense>
           )
         ) : activeTab === "alerts" ? (
           <div className="summary-panel">
             <div className="summary-header">
               <h3>התראות מחיר</h3>
             </div>
-            <PriceAlerts symbols={uniqueSymbols} livePrices={portfolio.livePrices} />
+            <Suspense fallback={<div className="loading">טוען התראות...</div>}>
+              <PriceAlerts symbols={uniqueSymbols} livePrices={portfolio.livePrices} />
+            </Suspense>
           </div>
         ) : (
           <>
