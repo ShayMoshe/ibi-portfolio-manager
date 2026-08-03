@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { formatDateLabel, formatDuration, parseDateToTimestamp } from "./utils/dates";
 import { formatNumber } from "./utils/format";
+import { ANALYSIS_LINKS } from "./utils/analysisLinks";
 
 interface ClosedPositionDetailProps {
   ticker: string;
@@ -244,6 +245,19 @@ const ClosedPositionDetail = ({
             {ticker}
             <span className="closed-position-badge">סגור</span>
           </h1>
+          <div className="stock-links">
+            {ANALYSIS_LINKS.map((link) => (
+              <a
+                key={link.label}
+                className="stock-link"
+                href={link.build(ticker)}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {link.label}
+              </a>
+            ))}
+          </div>
         </div>
         <div className="closed-date-range">
           <span>{totals.firstDate} – {totals.lastDate}</span>

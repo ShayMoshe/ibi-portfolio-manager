@@ -292,6 +292,12 @@ h1 {
   box-shadow: 0 10px 20px rgba(15, 23, 42, 0.18);
 }
 
+.cache-notice {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
 .ghost {
   border: 1px solid #cbd5f5;
   background: transparent;

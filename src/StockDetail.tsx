@@ -7,6 +7,7 @@ import {
 } from "./stockPriceService";
 import { parseDateToTimestamp, formatDateLabel, formatDuration } from "./utils/dates";
 import { formatNumber, formatUsd, formatSignedUsd, formatPercent } from "./utils/format";
+import { ANALYSIS_LINKS } from "./utils/analysisLinks";
 import KPICard from "./components/KPICard";
 import {
   AreaChart,
@@ -30,19 +31,6 @@ interface StockDetailProps {
   hasPastTrade?: boolean;
   onViewPastTrade?: () => void;
 }
-
-// Public, no-login stock-analysis sites that resolve by ticker alone.
-// (Google Finance needs an exchange suffix, so we link a Google search instead —
-// it reliably surfaces the finance card without us guessing the exchange.)
-const ANALYSIS_LINKS: { label: string; build: (t: string) => string }[] = [
-  { label: "Yahoo Finance", build: (t) => `https://finance.yahoo.com/quote/${encodeURIComponent(t)}` },
-  { label: "Google", build: (t) => `https://www.google.com/search?q=${encodeURIComponent(`${t} stock`)}` },
-  { label: "StockAnalysis", build: (t) => `https://stockanalysis.com/stocks/${encodeURIComponent(t)}/` },
-  { label: "Finviz", build: (t) => `https://finviz.com/quote.ashx?t=${encodeURIComponent(t)}` },
-  { label: "TradingView", build: (t) => `https://www.tradingview.com/symbols/${encodeURIComponent(t)}/` },
-  { label: "CNBC", build: (t) => `https://www.cnbc.com/quotes/${encodeURIComponent(t)}` },
-  { label: "𝕏", build: (t) => `https://x.com/search?q=${encodeURIComponent(`@${t}`)}&src=typed_query` },
-];
 
 // Persist the profit-range slider choice across sessions.
 const PROFIT_RANGE_KEY = "ibi_profit_range_max";

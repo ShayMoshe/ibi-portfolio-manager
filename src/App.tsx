@@ -15,6 +15,13 @@ import { IBI_COLUMNS, RawRow, RealizedRound } from "./types";
 import { exportToExcel } from "./utils/exportExcel";
 import { formatNumber, formatSignedUsd } from "./utils/format";
 import { formatDateLabel, parseDateToTimestamp, parseDateYear } from "./utils/dates";
+import {
+  CachedUpload,
+  clearCachedUpload,
+  formatUploadAge,
+  readCachedUpload,
+  saveCachedUpload,
+} from "./utils/uploadStorage";
 
 const StockDetail = lazy(() => import("./StockDetail"));
 const ClosedPositionDetail = lazy(() => import("./ClosedPositionDetail"));
@@ -140,10 +147,6 @@ const validateYears = (rows: Row[]) => {
   };
 };
 
-// Persist uploaded data for the lifetime of the browser tab so a page refresh
-// doesn't wipe it. Dev mode auto-loads from /dev-data instead, so we skip the
-// session cache there to keep that flow untouched.
-const SESSION_KEY = "ibi_session_data";
 const IMPORT_HISTORY_KEY = "ibi_import_history";
 
 type ImportHistoryEntry = {
@@ -172,43 +175,32 @@ const saveImportHistory = (history: ImportHistoryEntry[]) => {
   }
 };
 
-const readSession = (): { rows: Row[]; fileNames: string[] } | null => {
-  if (import.meta.env.DEV) return null;
-  try {
-    const raw = sessionStorage.getItem(SESSION_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as { rows?: Row[]; fileNames?: string[] };
-    if (!Array.isArray(parsed.rows) || parsed.rows.length === 0) return null;
-    return { rows: parsed.rows, fileNames: Array.isArray(parsed.fileNames) ? parsed.fileNames : [] };
-  } catch {
-    return null;
-  }
+const readCachedPortfolio = (): CachedUpload | null => {
+  return readCachedUpload(localStorage);
 };
 
-// Read the session cache once per tab load and reuse it across the state
+// Read the local cache once per load and reuse it across the state
 // initializers below, instead of parsing storage four separate times.
-let bootSessionLoaded = false;
-let bootSession: { rows: Row[]; fileNames: string[] } | null = null;
-const getBootSession = (): { rows: Row[]; fileNames: string[] } | null => {
-  if (!bootSessionLoaded) {
-    bootSession = readSession();
-    bootSessionLoaded = true;
+let bootCachedPortfolioLoaded = false;
+let bootCachedPortfolio: CachedUpload | null = null;
+const getBootCachedPortfolio = (): CachedUpload | null => {
+  if (!bootCachedPortfolioLoaded) {
+    bootCachedPortfolio = readCachedPortfolio();
+    bootCachedPortfolioLoaded = true;
   }
-  return bootSession;
+  return bootCachedPortfolio;
 };
 
 const App = () => {
-  const [rows, setRows] = useState<Row[]>(() => getBootSession()?.rows ?? []);
+  const [rows, setRows] = useState<Row[]>(() => getBootCachedPortfolio()?.rows ?? []);
   const [status, setStatus] = useState<string>(() => {
-    const session = getBootSession();
-    return session
-      ? `Loaded ${session.rows.length} rows from ${session.fileNames.length} file(s).`
-      : "Upload XLSX files to begin.";
+    const cached = getBootCachedPortfolio();
+    return cached ? `נטענו ${cached.rows.length} שורות מהזיכרון המקומי.` : "העלו קבצי XLSX כדי להתחיל.";
   });
   const [validationError, setValidationError] = useState<string | null>(() => {
-    const session = getBootSession();
-    if (!session) return null;
-    const validation = validateYears(session.rows);
+    const cached = getBootCachedPortfolio();
+    if (!cached) return null;
+    const validation = validateYears(cached.rows);
     return validation.ok ? null : validation.message;
   });
   const [isLoading, setIsLoading] = useState(false);
@@ -249,7 +241,14 @@ const App = () => {
     const v = new URLSearchParams(window.location.search).get("view");
     return v === "active" || v === "closed" ? v : null;
   });
-  const [fileNames, setFileNames] = useState<string[]>(() => getBootSession()?.fileNames ?? []);
+  const [fileNames, setFileNames] = useState<string[]>(() => getBootCachedPortfolio()?.fileNames ?? []);
+  const [cacheExpiresAt, setCacheExpiresAt] = useState<number | null>(
+    () => getBootCachedPortfolio()?.expiresAt ?? null
+  );
+  const [cacheSavedAt, setCacheSavedAt] = useState<number | null>(
+    () => getBootCachedPortfolio()?.savedAt ?? null
+  );
+  const [ageReference, setAgeReference] = useState(Date.now);
   const [importHistory, setImportHistory] = useState<ImportHistoryEntry[]>(readImportHistory);
   const [isDragging, setIsDragging] = useState(false);
 
@@ -267,6 +266,12 @@ const App = () => {
     window.history.replaceState(null, "", `?${params.toString()}`);
   }, [selectedTicker, detailView]);
 
+  // Keep the relative file age accurate while the page stays open.
+  useEffect(() => {
+    const timer = window.setInterval(() => setAgeReference(Date.now()), 60000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   // Open a ticker's detail in a specific view, and close it again.
   const openTicker = useCallback((ticker: string, view: DetailView) => {
     setSelectedTicker(ticker);
@@ -276,21 +281,6 @@ const App = () => {
     setSelectedTicker(null);
     setDetailView(null);
   }, []);
-
-  // Cache uploaded data in sessionStorage so it survives a page refresh.
-  // Skipped in dev, where /dev-data is auto-loaded on mount instead.
-  useEffect(() => {
-    if (import.meta.env.DEV) return;
-    try {
-      if (rows.length > 0) {
-        sessionStorage.setItem(SESSION_KEY, JSON.stringify({ rows, fileNames }));
-      } else {
-        sessionStorage.removeItem(SESSION_KEY);
-      }
-    } catch (error) {
-      console.warn("Failed to persist session data:", error);
-    }
-  }, [rows, fileNames]);
 
   const rowCount = useMemo(() => rows.length, [rows]);
 
@@ -902,12 +892,22 @@ const App = () => {
         allRows.push(...(await parseXlsxBuffer(buffer)));
       }
 
-      setFileNames(fileArray.map((file) => file.name));
+      const uploadedFileNames = fileArray.map((file) => file.name);
+      const cachedUpload = allRows.length > 0
+        ? saveCachedUpload(localStorage, allRows, uploadedFileNames)
+        : null;
+      if (allRows.length === 0) {
+        clearCachedUpload(localStorage);
+      }
+
+      setFileNames(uploadedFileNames);
       setRows(allRows);
+      setCacheExpiresAt(cachedUpload?.expiresAt ?? null);
+      setCacheSavedAt(cachedUpload?.savedAt ?? null);
       const historyEntry: ImportHistoryEntry = {
         id: `${Date.now()}-${fileArray.length}`,
         createdAt: Date.now(),
-        fileNames: fileArray.map((file) => file.name),
+        fileNames: uploadedFileNames,
         rowCount: allRows.length,
       };
       setImportHistory((prev) => {
@@ -925,7 +925,11 @@ const App = () => {
           setStatus(`שגיאת אימות: ${validation.message}`);
         } else {
           setValidationError(null);
-          setStatus(`Loaded ${allRows.length} rows from ${files.length} file(s).`);
+          setStatus(
+            cachedUpload
+              ? `נטענו ${allRows.length} שורות מ-${files.length} קבצים ונשמרו בדפדפן ל-30 יום.`
+              : `נטענו ${allRows.length} שורות מ-${files.length} קבצים.`
+          );
         }
       }
     } catch (error) {
@@ -937,10 +941,13 @@ const App = () => {
   };
 
   const handleClear = () => {
+    clearCachedUpload(localStorage);
     setRows([]);
     setFileNames([]);
+    setCacheExpiresAt(null);
+    setCacheSavedAt(null);
     setValidationError(null);
-    setStatus("Upload XLSX files to begin.");
+    setStatus("העלו קבצי XLSX כדי להתחיל.");
   };
 
   const handleExportStocks = (data: typeof stocksTableData, filename: string) => {
@@ -998,6 +1005,8 @@ const App = () => {
     const loadDevFiles = async () => {
       // Only run in development mode
       if (!import.meta.env.DEV) return;
+      // A manually uploaded portfolio takes precedence over bundled dev data.
+      if (getBootCachedPortfolio()) return;
 
       try {
         const baseUrl = import.meta.env.BASE_URL;
@@ -1124,7 +1133,7 @@ const App = () => {
           <div className="app-header-files">
             {fileNames.map((name, index) => (
               <span key={`${name}-${index}`} className="file-chip" title={name}>
-                📄 {name}
+                📄 {name}{cacheSavedAt ? ` · ${formatUploadAge(cacheSavedAt, ageReference)}` : ""}
               </span>
             ))}
             <label className="upload">
@@ -1141,8 +1150,16 @@ const App = () => {
               🖨 PDF
             </button>
             <button className="ghost" type="button" onClick={handleClear}>
-              🗑 נקה
+              🗑 איפוס קבצים
             </button>
+            {cacheExpiresAt && (
+              <span
+                className="cache-notice"
+                title={`הנתונים יימחקו אוטומטית ב-${new Date(cacheExpiresAt).toLocaleString("he-IL")}`}
+              >
+                💾 נשמר בדפדפן עד {new Date(cacheExpiresAt).toLocaleDateString("he-IL")}
+              </span>
+            )}
           </div>
         )}
       </header>
